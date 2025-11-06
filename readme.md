@@ -26,6 +26,26 @@ The framework uses `ntdll.dll`, `kernel32.dll`, `advapi32.dll`, and **Event Trac
 
 In addition to local process management, it provides a **secure TCP/TLS-based network abstraction** that allows remote process viewing and control.
 
+## Why NativeProcesses is Different
+
+Most .NET process libraries rely on `System.Diagnostics.Process` or WMI,
+which are limited in detail and performance. **NativeProcesses** takes a different approach:
+it communicates directly with the Windows kernel using low-level NT APIs.
+
+This enables:
+
+* **Real-time process and thread information** with Task Manager-level speed
+* **Full control** over processes (suspend, resume, kill, priority, I/O, security)
+* **Event-driven updates** through ETW (no polling delays)
+* **Optional secure remote access** over **TLS**
+
+Although originally built for **.NET Framework 4.8**,
+the codebase also runs under **.NET Core / .NET 6+** with minimal adjustments,
+making it suitable for both legacy and modern Windows environments.
+
+**In short:** NativeProcesses gives developers a complete, high-performance foundation
+for building advanced Task-Manager-style tools - something rarely found in any other open-source .NET project.
+
 ---
 
 ## Architecture Overview
@@ -241,7 +261,29 @@ A separate, "more" production-ready implementation is provided in **`SecureTcpCl
 | OS Compatibility | Windows 10/11 (x64) |
 
 ---
+## Dependencies
 
+**NativeProcesses** is lightweight and only depends on a few external libraries.
+All other functionality is implemented in pure **C# 7.3** using built-in .NET Framework 4.8 APIs.
+
+| Dependency | Purpose | Required |
+| -------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------ |
+| **Newtonsoft.Json** | JSON serialization for TLS-based network communication |  Yes |
+| **Microsoft.Diagnostics.Tracing.TraceEvent** | Real-time kernel event tracing (ETW) for process start/stop and I/O events | ️ Optional (for ETW provider) |
+| **System.Management** | WMI provider fallback for environments without ETW | ️ Optional |
+| **.NET Framework 4.8** | Base runtime (WinForms, TCP, TLS, Compression, Tasks) |  Yes |
+
+Install required NuGet packages:
+
+```bash
+Install-Package Newtonsoft.Json
+Install-Package Microsoft.Diagnostics.Tracing.TraceEvent
+```
+
+All other namespaces such as `System.Net.Sockets`, `System.Security.Cryptography.X509Certificates`, and
+`System.IO.Compression` are included in the .NET Framework 4.8 base class library.
+
+---
 ## Repository Layout
 
 ```
