@@ -352,9 +352,14 @@ local monitoring, remote communication, security info, and ETW-based events - fu
 
 ## License & Author
 
- 2025 **Selahattin Erkoc**
-Open for educational, research, and demonstration use.
-Commercial integration requires explicit permission.
+This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
+
+You are free to use, modify, and distribute this software under the terms of the GPLv3. 
+Any derivative work or redistributed version must also remain open-source under the same license.
+
+For the full license text, see the [LICENSE](./LICENSE) file or visit: 
+[https://www.gnu.org/licenses/gpl-3.0.html](https://www.gnu.org/licenses/gpl-3.0.html)
+
 
 -----
 
