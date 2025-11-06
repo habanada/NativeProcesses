@@ -283,37 +283,44 @@ processlist/
 3. Connect using the remote client
 
 
-#### 1\. Create the Certificate (PowerShell)
+#### 1. Create the Certificate (PowerShell)
 
-Run **PowerShell as an Administrator** and execute this command to create a new self-signed certificate in your user's store:
+Run **PowerShell as Administrator** and execute the following command to create a new self-signed certificate in your personal store:
 
 ```powershell
 New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "cert:\CurrentUser\My" -FriendlyName "NativeProcessServerCert" -KeyUsage DigitalSignature, KeyEncipherment
-```
+````
 
-*Note: You can replace `"localhost"` with your server's IP or DNS name if you wish.*
+*Note: You can replace `"localhost"` with your server's IP address or DNS name if needed.*
 
-#### 2\. Export the Certificates (certmgr.msc)
+---
 
-1. Press `Win + R`, type `certmgr.msc`, and press Enter.
-2. Navigate to **Persönlich** -\> **Zertifikate**.
-3. Find the certificate you just created (e.g., "localhost").
+#### 2. Export the Certificates (certmgr.msc)
+
+1. Press `Win + R`, type `certmgr.msc`, and press **Enter**.
+2. Navigate to **Personal** → **Certificates**.
+3. Locate the certificate you just created (e.g., "localhost").
+
+---
 
 **A. Export `.pfx` (for the Server):**
 
-1. Right-click the certificate → **Alle Aufgaben** → **Exportieren...**
-2. Select **"Ja, privaten Schlüssel exportieren"**.
-3. Use the default format (PFX).
-4. Set a **Kennwort** (e.g., `password`, as used in the demo code).
-5. Save this file as `cert.pfx` inside your **`Server`** project's output directory.
+1. Right-click the certificate → **All Tasks** → **Export...**
+2. Select **"Yes, export the private key"**.
+3. Use the default export format (PFX).
+4. Set a **password** (for example, `password`, as used in the demo code).
+5. Save the file as `cert.pfx` inside your **`Server`** project's output directory.
+
+---
 
 **B. Export `.cer` (for the Client):**
 
-1. Right-click the certificate again → **Alle Aufgaben** → **Exportieren...**
-2. Select **"Nein, privaten Schlüssel nicht exportieren"**.
-3. Select **"Base-64-codiert X.509 (.CER)"**.
-4. Save this file as `server.cer` inside your **`RemoteClient`** project's output directory.
----
+1. Right-click the certificate again → **All Tasks** → **Export...**
+2. Select **"No, do not export the private key"**.
+3. Choose **"Base-64 encoded X.509 (.CER)"** as the export format.
+4. Save the file as `server.cer` inside your **`RemoteClient`** project's output directory.
+
+```
 
 
 
