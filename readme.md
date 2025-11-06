@@ -362,7 +362,7 @@ New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "cert:\Current
 3. Choose **"Base-64 encoded X.509 (.CER)"** as the export format.
 4. Save the file as `server.cer` inside your **`RemoteClient`** project's output directory.
 
-```
+
 
 
 
