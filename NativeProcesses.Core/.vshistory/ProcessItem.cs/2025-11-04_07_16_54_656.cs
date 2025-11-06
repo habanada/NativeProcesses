@@ -1,0 +1,11 @@
+﻿namespace ProcessDemo
+{
+    public class ProcessItem
+    {
+        public string Name { get; set; }
+        public string ExePath { get; set; }
+        public int PID { get; set; }
+
+        // Fügen Sie hier weitere Eigenschaften hinzu, die Sie anzeigen möchten
+    }
+}
