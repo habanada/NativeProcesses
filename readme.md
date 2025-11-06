@@ -1,3 +1,14 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png" alt="NativeProcesses Logo" width="200">
+</p>
+<p align="center">
+  <b>High-performance .NET 4.8 framework</b> for real-time Windows process monitoring, control, and analysis — including secure remote communication over TLS.
+</p>
+
+<p align="center">
+  Developed in <b>C# 7.3</b> · Targeting <b>.NET Framework 4.8</b> · GUI: <b>WinForms</b>
+</p>
+
 # NativeProcesses Framework
 
 A modular, high-performance .NET framework for real-time monitoring, control, and analysis of Windows processes - 
@@ -299,3 +310,6 @@ The goal of **NativeProcesses** is to remain a **transparent, native, and effici
 **Project:** NativeProcesses Framework
 **Version:** 1.0.0 (2025)
 
+<p align="center">
+  ⭐ If you find this project useful, consider giving it a star on GitHub!  
+</p>
