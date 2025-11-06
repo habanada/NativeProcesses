@@ -212,6 +212,22 @@ if (await client.ConnectAsync())
 ```
 
 ---
+### Network Security & Certificate Validation
+
+For demonstration purposes, the default `SecureTcpClient` implementation uses a validation callback that **blindly accepts all certificates**:
+`_ssl = new SslStream(_client.GetStream(), false, (s, c, ch, e) => true);`
+
+**This is insecure and vulnerable to Man-in-the-Middle (MITM) attacks.**
+
+A separate, "more" production-ready implementation is provided in **`SecureTcpClient_withcert.cs`**. This class implements **Certificate Pinning** by:
+
+1. Loading a public `.cer` file from the server.
+2. Comparing the **thumbprint** of the server's presented certificate with the thumbprint of the known `.cer` file.
+3. Only allowing the connection if the thumbprints match, ensuring the client is talking to the correct server.
+
+
+
+---
 
 ## Technical Details
 
@@ -266,7 +282,40 @@ processlist/
 2. Start the remote server
 3. Connect using the remote client
 
+
+#### 1\. Create the Certificate (PowerShell)
+
+Run **PowerShell as an Administrator** and execute this command to create a new self-signed certificate in your user's store:
+
+```powershell
+New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "cert:\CurrentUser\My" -FriendlyName "NativeProcessServerCert" -KeyUsage DigitalSignature, KeyEncipherment
+```
+
+*Note: You can replace `"localhost"` with your server's IP or DNS name if you wish.*
+
+#### 2\. Export the Certificates (certmgr.msc)
+
+1. Press `Win + R`, type `certmgr.msc`, and press Enter.
+2. Navigate to **Persönlich** -\> **Zertifikate**.
+3. Find the certificate you just created (e.g., "localhost").
+
+**A. Export `.pfx` (for the Server):**
+
+1. Right-click the certificate → **Alle Aufgaben** → **Exportieren...**
+2. Select **"Ja, privaten Schlüssel exportieren"**.
+3. Use the default format (PFX).
+4. Set a **Kennwort** (e.g., `password`, as used in the demo code).
+5. Save this file as `cert.pfx` inside your **`Server`** project's output directory.
+
+**B. Export `.cer` (for the Client):**
+
+1. Right-click the certificate again → **Alle Aufgaben** → **Exportieren...**
+2. Select **"Nein, privaten Schlüssel nicht exportieren"**.
+3. Select **"Base-64-codiert X.509 (.CER)"**.
+4. Save this file as `server.cer` inside your **`RemoteClient`** project's output directory.
 ---
+
+
 
 ## Developer Notes & Known Issues
 
