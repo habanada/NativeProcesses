@@ -408,6 +408,28 @@ The goal of **NativeProcesses** is to remain a **transparent, native, and effici
 **Project:** NativeProcesses Framework
 **Version:** 1.0.0 (2025)
 
+
+---
+
+## Third-Party Notices
+
+This project makes use of third-party libraries distributed under open-source licenses. 
+Their original license terms and copyright notices are retained below as required by their respective authors.
+
+### Newtonsoft.Json
+Copyright  James Newton-King 
+Licensed under the [MIT License](https://licenses.nuget.org/MIT)
+
+### Microsoft.Diagnostics.Tracing.TraceEvent
+Copyright  Microsoft Corporation 
+Licensed under the [MIT License](https://licenses.nuget.org/MIT)
+
+These components are redistributed in binary form only and have not been modified. 
+No ownership or endorsement by the original authors is implied.
+
+---
+
+
 <p align="center">
   ⭐ If you find this project useful, consider giving it a star on GitHub!  
 </p>
