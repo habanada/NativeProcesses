@@ -18,6 +18,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Diagnostics;
+using System.Threading;
 
 namespace NativeProcesses.Core
 {
@@ -26,7 +27,8 @@ namespace NativeProcesses.Core
         private readonly IProcessEventProvider _provider;
         private readonly ConcurrentDictionary<int, FullProcessInfo> _processCache;
         private readonly IEngineLogger _logger;
-
+        private readonly BlockingCollection<FullProcessInfo> _detailLoadQueue = new BlockingCollection<FullProcessInfo>();
+        private readonly List<Thread> _detailLoadWorkers = new List<Thread>();
         public event Action<FullProcessInfo> ProcessAdded;
         public event Action<int> ProcessRemoved;
         public event Action<FullProcessInfo> ProcessUpdated;
@@ -46,12 +48,26 @@ namespace NativeProcesses.Core
         public void Start()
         {
             _logger?.Log(LogLevel.Info, "ProcessService starting...");
+
+            int workerCount = Math.Max(1, Environment.ProcessorCount / 2);
+            for (int i = 0; i < workerCount; i++)
+            {
+                var worker = new Thread(DetailLoadConsumerLoop)
+                {
+                    IsBackground = true,
+                    Name = $"DetailLoader-{i}"
+                };
+                worker.Start();
+                _detailLoadWorkers.Add(worker);
+            }
+
             _provider.Start(this, _logger);
         }
 
         public void Stop()
         {
             _logger?.Log(LogLevel.Info, "ProcessService stopping...");
+            _detailLoadQueue.CompleteAdding();
             _provider.Stop();
         }
 
@@ -66,7 +82,11 @@ namespace NativeProcesses.Core
             if (_processCache.TryAdd(pid, newInfo))
             {
                 ProcessAdded?.Invoke(newInfo.CreateSnapshot());
-                Task.Run(() => LoadSlowDetails(newInfo));
+
+                if (!_detailLoadQueue.IsAddingCompleted)
+                {
+                    _detailLoadQueue.Add(newInfo);
+                }
             }
             else
             {
@@ -128,7 +148,29 @@ namespace NativeProcesses.Core
                 ProcessUpdated?.Invoke(info.CreateSnapshot());
             }
         }
-
+        private void DetailLoadConsumerLoop()
+        {
+            try
+            {
+                foreach (var info in _detailLoadQueue.GetConsumingEnumerable())
+                {
+                    try
+                    {
+                        if (info != null)
+                        {
+                            LoadSlowDetails(info);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Log(LogLevel.Debug, $"Detail loader worker failed for PID {info?.Pid}", ex);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
         private void LoadSlowDetails(FullProcessInfo info)
         {
             if (info.IsLoadingDetails || info.IsDetailsLoaded)
