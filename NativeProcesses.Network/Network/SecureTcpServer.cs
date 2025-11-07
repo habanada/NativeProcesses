@@ -15,6 +15,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
+using NativeProcesses.Core;
+using static NativeProcesses.Core.NativeProcessLister;
 
 namespace NativeProcesses.Network
 {
@@ -26,17 +28,19 @@ namespace NativeProcesses.Network
         private readonly List<SslStream> _clients = new List<SslStream>();
         private readonly object _clientLock = new object();
         private CancellationTokenSource _cts;
+        private readonly IEngineLogger _logger;
 
         private readonly ConcurrentDictionary<SslStream, SemaphoreSlim> _writeLocks = new ConcurrentDictionary<SslStream, SemaphoreSlim>();
 
         public event Action<SslStream, string, string> MessageReceived;
 
-        public SecureTcpServer(int port, X509Certificate2 certificate, string authToken)
+        public SecureTcpServer(int port, X509Certificate2 certificate, string authToken, IEngineLogger logger = null)
         {
             _listener = new TcpListener(IPAddress.Any, port);
             _cert = certificate;
             _authToken = authToken;
             _cts = new CancellationTokenSource();
+            _logger = logger;
         }
 
         public async Task StartAsync()
@@ -53,8 +57,9 @@ namespace NativeProcesses.Network
                 {
                     break;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    _logger?.Log(LogLevel.Error, "Error in the server accept client loop", ex);
                 }
             }
         }
@@ -78,6 +83,7 @@ namespace NativeProcesses.Network
                 try
                 {
                     SendMessageAsync(client, "server_shutdown", null).Wait(500);
+                    _logger?.Log(LogLevel.Info, $"Server shutdown.");
                     client.Close();
                 }
                 catch
@@ -89,8 +95,10 @@ namespace NativeProcesses.Network
         private async Task HandleClientAsync(TcpClient client)
         {
             SslStream ssl = null;
+            string clientIp = "Unknown";
             try
             {
+                clientIp = client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
                 using (client)
                 using (ssl = new SslStream(client.GetStream(), false))
                 {
@@ -100,13 +108,14 @@ namespace NativeProcesses.Network
                     if (authMsg == null || authMsg.Type != "auth" || !SecureTokenEquals(authMsg.Data, _authToken))
                     {
                         await SendMessageAsync(ssl, "auth_failed", null);
+                        _logger?.Log(LogLevel.Warning, $"Client {clientIp} auth failed.");
                         return;
                     }
 
                     _writeLocks.TryAdd(ssl, new SemaphoreSlim(1, 1));
 
                     await SendMessageAsync(ssl, "auth_ok", null);
-
+                    _logger?.Log(LogLevel.Info, $"Client connected: {clientIp}");
                     lock (_clientLock)
                     {
                         if (!_cts.Token.IsCancellationRequested)
@@ -130,8 +139,9 @@ namespace NativeProcesses.Network
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                _logger?.Log(LogLevel.Warning, $"Client {clientIp} disconnected (error)", ex);
             }
             finally
             {
@@ -142,6 +152,7 @@ namespace NativeProcesses.Network
                         _clients.Remove(ssl);
                     }
                     _writeLocks.TryRemove(ssl, out _);
+                    _logger?.Log(LogLevel.Info, $"Client {clientIp} disconnected.");
                 }
             }
         }

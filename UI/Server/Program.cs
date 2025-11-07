@@ -86,7 +86,7 @@ namespace ProcessServer
             service.DetailOptions.LoadSignatureInfo = true;
             service.DetailOptions.LoadMitigationInfo = true;
 
-            var server = new SecureTcpServer(port, cert,token);
+            var server = new SecureTcpServer(port, cert,token,logger);
             var hostInstance = new ProcessNetworkHost(service, server, provider);
 
             service.Start();
