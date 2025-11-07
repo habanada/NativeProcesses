@@ -1,227 +1,227 @@
-﻿///*
-//   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
-//   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
-//*/
-//using Newtonsoft.Json;
-//using System;
-//using System.IO;
-//using System.IO.Compression;
-//using System.Net.Security;
-//using System.Net.Sockets;
-//using System.Security.Authentication;
-//using System.Security.Cryptography.X509Certificates;
-//using System.Text;
-//using System.Threading.Tasks;
+﻿/*
+   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using Newtonsoft.Json;
+using System;
+using System.IO;
+using System.IO.Compression;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading.Tasks;
 
-//namespace NativeProcesses.Network
-//{
-//    public class SecureTcpClient
-//    {
-//        private readonly string _host;
-//        private readonly int _port;
-//        private readonly string _token;
-//        private TcpClient _client;
-//        private SslStream _ssl;
-//        private X509Certificate2 _expectedCert;
+namespace NativeProcesses.Network
+{
+    public class SecureTcpClient
+    {
+        private readonly string _host;
+        private readonly int _port;
+        private readonly string _token;
+        private TcpClient _client;
+        private SslStream _ssl;
+        private X509Certificate2 _expectedCert;
 
-//        public event Action<string, string> MessageReceived;
-//        public event Action Disconnected;
-//        public bool IsConnected { get { return _client != null && _client.Connected; } }
+        public event Action<string, string> MessageReceived;
+        public event Action Disconnected;
+        public bool IsConnected { get { return _client != null && _client.Connected; } }
 
-//        public SecureTcpClient(string host, int port, string token)
-//        {
-//            _host = host;
-//            _port = port;
-//            _token = token;
+        public SecureTcpClient(string host, int port, string token)
+        {
+            _host = host;
+            _port = port;
+            _token = token;
 
-//            try
-//            {
-//                _expectedCert = new X509Certificate2("server.cer");
-//            }
-//            catch (Exception)
-//            {
-//                _expectedCert = null;
-//            }
-//        }
+            try
+            {
+                _expectedCert = new X509Certificate2("server.cer");
+            }
+            catch (Exception)
+            {
+                _expectedCert = null;
+            }
+        }
 
-//        public async Task<bool> ConnectAsync()
-//        {
-//            try
-//            {
-//                if (_expectedCert == null)
-//                {
-//                    throw new Exception("Server-Zertifikat 'server.cer' konnte nicht geladen werden.");
-//                }
+        public async Task<bool> ConnectAsync()
+        {
+            try
+            {
+                if (_expectedCert == null)
+                {
+                    throw new Exception("Server-Zertifikat 'server.cer' konnte nicht geladen werden.");
+                }
 
-//                _client = new TcpClient();
-//                await _client.ConnectAsync(_host, _port);
+                _client = new TcpClient();
+                await _client.ConnectAsync(_host, _port);
 
-//                _ssl = new SslStream(
-//                    _client.GetStream(),
-//                    false,
-//                    CustomCertificateValidationCallback
-//                );
+                _ssl = new SslStream(
+                    _client.GetStream(),
+                    false,
+                    CustomCertificateValidationCallback
+                );
 
-//                await _ssl.AuthenticateAsClientAsync(_host, null, SslProtocols.Tls12, false);
+                await _ssl.AuthenticateAsClientAsync(_host, null, SslProtocols.Tls12, false);
 
-//                await SendMessageAsync("auth", _token);
-//                NetworkMessage authResponse = await ReceiveMessageAsync();
-//                if (authResponse != null && authResponse.Type == "auth_ok")
-//                {
-//                    _ = Task.Run(ReceiveLoop);
-//                    return true;
-//                }
-//                else
-//                {
-//                    Disconnect();
-//                    return false;
-//                }
-//            }
-//            catch
-//            {
-//                Disconnect();
-//                return false;
-//            }
-//        }
+                await SendMessageAsync("auth", _token);
+                NetworkMessage authResponse = await ReceiveMessageAsync();
+                if (authResponse != null && authResponse.Type == "auth_ok")
+                {
+                    _ = Task.Run(ReceiveLoop);
+                    return true;
+                }
+                else
+                {
+                    Disconnect();
+                    return false;
+                }
+            }
+            catch
+            {
+                Disconnect();
+                return false;
+            }
+        }
 
-//        private bool CustomCertificateValidationCallback(
-//            object sender,
-//            X509Certificate certificate,
-//            X509Chain chain,
-//            SslPolicyErrors sslPolicyErrors)
-//        {
-//            if (sslPolicyErrors == SslPolicyErrors.None)
-//            {
-//                return true;
-//            }
+        private bool CustomCertificateValidationCallback(
+            object sender,
+            X509Certificate certificate,
+            X509Chain chain,
+            SslPolicyErrors sslPolicyErrors)
+        {
+            if (sslPolicyErrors == SslPolicyErrors.None)
+            {
+                return true;
+            }
 
-//            if (certificate == null)
-//            {
-//                return false;
-//            }
+            if (certificate == null)
+            {
+                return false;
+            }
 
-//            var serverCert = new X509Certificate2(certificate);
-//            return serverCert.Thumbprint == _expectedCert.Thumbprint;
-//        }
+            var serverCert = new X509Certificate2(certificate);
+            return serverCert.Thumbprint == _expectedCert.Thumbprint;
+        }
 
-//        // ... (Der Rest der Klasse: Disconnect, SendMessageAsync, ReceiveLoop, etc. bleibt gleich) ...
+        // ... (Der Rest der Klasse: Disconnect, SendMessageAsync, ReceiveLoop, etc. bleibt gleich) ...
 
-//        public void Disconnect()
-//        {
-//            try
-//            {
-//                _ssl?.Close();
-//                _client?.Close();
-//            }
-//            catch { }
-//            finally
-//            {
-//                _ssl = null;
-//                _client = null;
-//            }
-//        }
+        public void Disconnect()
+        {
+            try
+            {
+                _ssl?.Close();
+                _client?.Close();
+            }
+            catch { }
+            finally
+            {
+                _ssl = null;
+                _client = null;
+            }
+        }
 
-//        public async Task SendMessageAsync(string type, object data)
-//        {
-//            if (!IsConnected) return;
-//            string jsonData;
-//            if (data is string s)
-//                jsonData = s;
-//            else
-//                jsonData = data == null ?
-//                null : JsonConvert.SerializeObject(data);
+        public async Task SendMessageAsync(string type, object data)
+        {
+            if (!IsConnected) return;
+            string jsonData;
+            if (data is string s)
+                jsonData = s;
+            else
+                jsonData = data == null ?
+                null : JsonConvert.SerializeObject(data);
 
-//            string json = JsonConvert.SerializeObject(new NetworkMessage { Type = type, Data = jsonData });
+            string json = JsonConvert.SerializeObject(new NetworkMessage { Type = type, Data = jsonData });
 
-//            byte[] uncompressed = Encoding.UTF8.GetBytes(json);
-//            byte[] payload = Compress(uncompressed);
-//            byte[] length = BitConverter.GetBytes(payload.Length);
+            byte[] uncompressed = Encoding.UTF8.GetBytes(json);
+            byte[] payload = Compress(uncompressed);
+            byte[] length = BitConverter.GetBytes(payload.Length);
 
-//            await _ssl.WriteAsync(length, 0, length.Length);
-//            await _ssl.WriteAsync(payload, 0, payload.Length);
-//            await _ssl.FlushAsync();
-//        }
+            await _ssl.WriteAsync(length, 0, length.Length);
+            await _ssl.WriteAsync(payload, 0, payload.Length);
+            await _ssl.FlushAsync();
+        }
 
-//        private async Task ReceiveLoop()
-//        {
-//            try
-//            {
-//                while (IsConnected)
-//                {
-//                    NetworkMessage msg = await
-//                    ReceiveMessageAsync();
-//                    if (msg == null)
-//                    {
-//                        break;
-//                    }
+        private async Task ReceiveLoop()
+        {
+            try
+            {
+                while (IsConnected)
+                {
+                    NetworkMessage msg = await
+                    ReceiveMessageAsync();
+                    if (msg == null)
+                    {
+                        break;
+                    }
 
-//                    if (msg.Type == "server_shutdown")
-//                    {
-//                        break;
-//                    }
+                    if (msg.Type == "server_shutdown")
+                    {
+                        break;
+                    }
 
-//                    MessageReceived?.Invoke(msg.Type, msg.Data);
-//                }
-//            }
-//            catch
-//            {
-//            }
-//            finally
-//            {
-//                Disconnect();
-//                Disconnected?.Invoke();
-//            }
-//        }
+                    MessageReceived?.Invoke(msg.Type, msg.Data);
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                Disconnect();
+                Disconnected?.Invoke();
+            }
+        }
 
-//        private async Task<NetworkMessage> ReceiveMessageAsync()
-//        {
-//            byte[] lenBuf = new byte[4];
-//            int read = await _ssl.ReadAsync(lenBuf, 0, 4);
-//            if (read < 4) return null;
+        private async Task<NetworkMessage> ReceiveMessageAsync()
+        {
+            byte[] lenBuf = new byte[4];
+            int read = await _ssl.ReadAsync(lenBuf, 0, 4);
+            if (read < 4) return null;
 
-//            int len = BitConverter.ToInt32(lenBuf, 0);
-//            if (len <= 0 || len > 10 * 1024 * 1024)
-//            {
-//                return null;
-//            }
+            int len = BitConverter.ToInt32(lenBuf, 0);
+            if (len <= 0 || len > 10 * 1024 * 1024)
+            {
+                return null;
+            }
 
-//            byte[] compressed = new byte[len];
-//            int totalRead = 0;
-//            while (totalRead < len)
-//            {
-//                read = await _ssl.ReadAsync(compressed, totalRead, len - totalRead);
-//                if (read == 0) return null;
-//                totalRead += read;
-//            }
+            byte[] compressed = new byte[len];
+            int totalRead = 0;
+            while (totalRead < len)
+            {
+                read = await _ssl.ReadAsync(compressed, totalRead, len - totalRead);
+                if (read == 0) return null;
+                totalRead += read;
+            }
 
-//            byte[] uncompressed = Decompress(compressed);
-//            string json = Encoding.UTF8.GetString(uncompressed);
-//            return JsonConvert.DeserializeObject<NetworkMessage>(json);
-//        }
+            byte[] uncompressed = Decompress(compressed);
+            string json = Encoding.UTF8.GetString(uncompressed);
+            return JsonConvert.DeserializeObject<NetworkMessage>(json);
+        }
 
-//        private byte[] Compress(byte[] data)
-//        {
-//            using (MemoryStream ms = new MemoryStream())
-//            {
-//                using (DeflateStream ds = new DeflateStream(ms, CompressionLevel.Fastest, true))
-//                {
-//                    ds.Write(data, 0, data.Length);
-//                }
-//                return ms.ToArray();
-//            }
-//        }
+        private byte[] Compress(byte[] data)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (DeflateStream ds = new DeflateStream(ms, CompressionLevel.Fastest, true))
+                {
+                    ds.Write(data, 0, data.Length);
+                }
+                return ms.ToArray();
+            }
+        }
 
-//        private byte[] Decompress(byte[] data)
-//        {
-//            using (MemoryStream output = new MemoryStream())
-//            {
-//                using (MemoryStream input = new MemoryStream(data))
-//                using (DeflateStream ds = new DeflateStream(input, CompressionMode.Decompress))
-//                {
-//                    ds.CopyTo(output);
-//                }
-//                return output.ToArray();
-//            }
-//        }
-//    }
-//}
+        private byte[] Decompress(byte[] data)
+        {
+            using (MemoryStream output = new MemoryStream())
+            {
+                using (MemoryStream input = new MemoryStream(data))
+                using (DeflateStream ds = new DeflateStream(input, CompressionMode.Decompress))
+                {
+                    ds.CopyTo(output);
+                }
+                return output.ToArray();
+            }
+        }
+    }
+}

@@ -146,13 +146,20 @@ namespace NativeProcesses.Core
                     if (this.DetailOptions.LoadExePathAndCommandLine)
                     {
                         try { info.ExePath = proc.GetExePath(); }
+                        catch (Win32Exception ex)
+                        {
+                            info.ExePath = "Access Denied";
+                        }
                         catch (Exception ex)
                         {
                             info.ExePath = "Access Denied";
                             _logger?.Log(LogLevel.Debug, $"Failed to get ExePath for PID {info.Pid}.", ex);
                         }
-
                         try { info.CommandLine = proc.GetCommandLine(); }
+                        catch (Win32Exception ex)
+                        {
+                            info.CommandLine = "Access Denied";
+                        }
                         catch (Exception ex)
                         {
                             info.CommandLine = "Access Denied";
@@ -163,6 +170,8 @@ namespace NativeProcesses.Core
                     if (this.DetailOptions.LoadIoCounters)
                     {
                         try { info.IoCounters = proc.GetIoCounters(); }
+                        catch (Win32Exception ex)
+                        { } //denoise
                         catch (Exception ex)
                         {
                             _logger?.Log(LogLevel.Debug, $"Failed to get IoCounters for PID {info.Pid}.", ex);
@@ -172,6 +181,8 @@ namespace NativeProcesses.Core
                     if (this.DetailOptions.LoadSecurityInfo)
                     {
                         try { info.SecurityInfo = proc.GetSecurityInfo(); }
+                        catch (Win32Exception ex)
+                        { } //denoise
                         catch (Exception ex)
                         {
                             _logger?.Log(LogLevel.Debug, $"Failed to get SecurityInfo for PID {info.Pid}.", ex);
@@ -181,6 +192,8 @@ namespace NativeProcesses.Core
                     if (this.DetailOptions.LoadMitigationInfo)
                     {
                         try { info.MitigationInfo = proc.GetMitigationInfo(); }
+                        catch (Win32Exception ex)
+                        { } //denoise
                         catch (Exception ex)
                         {
                             _logger?.Log(LogLevel.Debug, $"Failed to get MitigationInfo for PID {info.Pid}.", ex);
@@ -193,7 +206,8 @@ namespace NativeProcesses.Core
                 info.ExePath = ex.Message;
                 info.CommandLine = ex.Message;
                 info.SecurityInfo.UserName = ex.Message;
-                _logger?.Log(LogLevel.Debug, $"Failed to open PID {info.Pid} for details.", ex);
+                //denoise
+                //    _logger?.Log(LogLevel.Debug, $"Failed to open PID {info.Pid} for details.", ex);
             }
 
             if (info.ExePath.StartsWith("Access Denied") || info.ExePath.StartsWith("["))
@@ -233,7 +247,8 @@ namespace NativeProcesses.Core
                         info.FileCompany = "N/A";
                         info.FileDescription = ex.Message;
                         info.FileVersion = "N/A";
-                        _logger?.Log(LogLevel.Debug, $"Failed to get FileVersionInfo for {info.ExePath}.", ex);
+                        //denoise
+                        //    _logger?.Log(LogLevel.Debug, $"Failed to get FileVersionInfo for {info.ExePath}.", ex);
                     }
                 }
             }
