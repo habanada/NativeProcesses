@@ -94,7 +94,7 @@ It acts as the hub and façade for process information management.
  - `ProcessAdded` 
  - `ProcessRemoved` 
  - `ProcessUpdated`
-4. Asynchronously loads additional data (command line, signatures, mitigation info) without blocking updates.
+4. Asynchronously loads additional data (command line, signatures, etc.) using a dedicated, rate-limited producer-consumer queue to prevent ThreadPool starvation and ensure UI/network responsiveness.
 5. Smooths CPU usage data via exponential moving average (EMA) for a more stable UI.
 
 ---
@@ -182,7 +182,7 @@ Encapsulates a process handle (`IntPtr`) and provides:
 ### ProcessNetworkHost
 Server-side bridge between `ProcessService` and network clients:
 1. Subscribes to `ProcessService` events (`ProcessAdded`, `ProcessUpdated`, `ProcessRemoved`).
-2. Broadcasts changes using compact JSON objects (`ProcessVolatileUpdate`).
+2. Broadcasts frequent metric changes (CPU, Mem, I/O) using a lightweight `ProcessVolatileUpdate` object, minimizing network traffic. Full details are sent less often.
 3. Handles incoming client commands and executes corresponding operations (`ProcessManager.Kill`, etc.).
 
 ---
@@ -234,14 +234,8 @@ if (await client.ConnectAsync())
 ---
 ### Network Security & Certificate Validation
 
-For demonstration purposes, the default `SecureTcpClient` implementation uses a validation callback that **blindly accepts all certificates**:
-`_ssl = new SslStream(_client.GetStream(), false, (s, c, ch, e) => true);`
-
-**This is insecure and vulnerable to Man-in-the-Middle (MITM) attacks.**
-
-A separate, "more" production-ready implementation is provided in **`SecureTcpClient_withcert.cs`**. This class implements **Certificate Pinning** by:
-
-1. Loading a public `.cer` file from the server.
+The framework's `SecureTcpClient` implements **Certificate Pinning** by default to prevent Man-in-the-Middle (MITM) attacks. It works by:
+1. Loading a public `.cer` filein its directory (you get it from the server by exporting it **without private key**!).
 2. Comparing the **thumbprint** of the server's presented certificate with the thumbprint of the known `.cer` file.
 3. Only allowing the connection if the thumbprints match, ensuring the client is talking to the correct server.
 
@@ -372,9 +366,9 @@ The framework is fully functional and stable, but a few areas are still being re
 
 | Area | Description | Status |
 | ------------------------ | ---------------------------------------------------------------------------------------------------- | --------------------- |
-| **Exception Handling** | Some "empty" or overly broad `try/catch` blocks exist and need to be tightened. | Planned |
-| **Log Noise** | Frequent `"Failed to get ... pid ..."` logs appear; logging will be throttled and made configurable. | Improving |
-| **Async Detail Loading** | `LoadSlowDetails()` spawns many concurrent background tasks; concurrency limiting will be added. | Under review |
+| **Exception Handling** | Vague `try/catch` blocks have been refined ("Exception Denoise") to improve stability. | ✅ **Done** |
+| **Log Noise** | Throttled and "denoised" logging to remove repetitive "Access Denied" errors. | ✅ **Done** |
+| **Async Detail Loading** | `LoadSlowDetails()` now uses a dedicated producer-consumer queue to prevent ThreadPool starvation. | ✅ **Done** |
 | **Thread List Refresh** | Thread data currently replaces full lists instead of diff updates. | To be optimized |
 | **Unit Testing** | Coverage is low but test scaffolding is ready. | Expanding |
 | **WMI Provider** | Stable but slower; remains an optional fallback to ETW. | Working as intended |
