@@ -9,7 +9,9 @@ using Microsoft.Diagnostics.Tracing.Session;
 using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
 using Microsoft.Diagnostics.Tracing;
-namespace NativeProcesses.Core
+using NativeProcesses.Core.Engine;
+
+namespace NativeProcesses.Core.Providers
 {
     public class EtwProcessProvider : IProcessEventProvider
     {

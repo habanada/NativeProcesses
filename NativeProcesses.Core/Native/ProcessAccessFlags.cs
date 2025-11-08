@@ -3,7 +3,7 @@
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
 using System;
-namespace NativeProcesses.Core
+namespace NativeProcesses.Core.Native
 {
     [Flags]
     public enum ProcessAccessFlags : uint

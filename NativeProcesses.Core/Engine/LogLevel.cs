@@ -4,9 +4,13 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace NativeProcesses.Core
+namespace NativeProcesses.Core.Engine
 {
-    public class Class1
+    public enum LogLevel
     {
+        Debug,
+        Info,
+        Warning,
+        Error
     }
 }

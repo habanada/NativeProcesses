@@ -19,8 +19,10 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Threading;
+using NativeProcesses.Core.Providers;
+using NativeProcesses.Core.Native;
 
-namespace NativeProcesses.Core
+namespace NativeProcesses.Core.Engine
 {
     public class ProcessService : IProcessNotifier, IDisposable
     {

@@ -4,6 +4,9 @@ using System.Net.Security;
 using System.Threading.Tasks;
 using System;
 using NativeProcesses.Core;
+using NativeProcesses.Core.Providers;
+using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Native;
 
 namespace NativeProcesses.Network
 {

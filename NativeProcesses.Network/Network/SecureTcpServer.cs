@@ -16,7 +16,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using NativeProcesses.Core;
-using static NativeProcesses.Core.NativeProcessLister;
+using NativeProcesses.Core.Engine;
 
 namespace NativeProcesses.Network
 {

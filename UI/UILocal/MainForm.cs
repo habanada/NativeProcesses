@@ -5,6 +5,9 @@ using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using NativeProcesses.Core;
+using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Native;
+using NativeProcesses.Core.Providers;
 
 namespace ProcessDemo
 {

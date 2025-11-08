@@ -5,7 +5,8 @@
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-namespace NativeProcesses.Core
+
+namespace NativeProcesses.Core.Native
 {
     public static class ProcessManager
     {

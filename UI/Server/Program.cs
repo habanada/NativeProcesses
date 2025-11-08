@@ -34,6 +34,8 @@
  *  --------------------------------------------------------------
  */
 using NativeProcesses.Core;
+using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Providers;
 using NativeProcesses.Network;
 using System;
 using System.IO;

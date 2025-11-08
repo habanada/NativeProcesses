@@ -7,7 +7,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace NativeProcesses.Core
+namespace NativeProcesses.Core.Native
 {
     public class ManagedProcess : IDisposable
     {

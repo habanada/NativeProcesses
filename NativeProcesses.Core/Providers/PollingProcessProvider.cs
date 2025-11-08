@@ -2,6 +2,8 @@
    NativeProcesses Framework  |  © 2025 Selahattin Erkoc
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
+using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Native;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -10,7 +12,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace NativeProcesses.Core
+namespace NativeProcesses.Core.Providers
 {
     public class PollingProcessProvider : IProcessEventProvider
     {
@@ -116,5 +118,6 @@ namespace NativeProcesses.Core
 
         public void Stop() { _cts?.Cancel(); }
         public void Dispose() { Stop(); }
+
     }
 }

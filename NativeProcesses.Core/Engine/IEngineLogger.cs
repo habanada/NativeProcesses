@@ -3,7 +3,8 @@
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
 using System;
-namespace NativeProcesses.Core
+
+namespace NativeProcesses.Core.Engine
 {
     public interface IEngineLogger
     {

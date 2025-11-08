@@ -2,8 +2,9 @@
    NativeProcesses Framework  |  © 2025 Selahattin Erkoc
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
+using NativeProcesses.Core.Engine;
 using System;
-namespace NativeProcesses.Core
+namespace NativeProcesses.Core.Providers
 {
     public class HybridProcessProvider : IProcessEventProvider
     {

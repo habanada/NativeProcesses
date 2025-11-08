@@ -5,7 +5,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace NativeProcesses.Core
+namespace NativeProcesses.Core.Engine
 {
     public interface IProcessNotifier
     {
