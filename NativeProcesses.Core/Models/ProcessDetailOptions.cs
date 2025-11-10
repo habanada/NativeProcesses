@@ -12,5 +12,7 @@ namespace NativeProcesses.Core
         public bool LoadMitigationInfo { get; set; } = true;
         public bool LoadSignatureInfo { get; set; } = true;
         public bool LoadFileVersionInfo { get; set; } = true;
-    }
+        public bool LoadModules { get; set; } = false;
+        public bool LoadHandles { get; set; } = false;
+    }    
 }

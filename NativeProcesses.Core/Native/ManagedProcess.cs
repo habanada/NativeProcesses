@@ -1,11 +1,12 @@
-﻿/*
-   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
-   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
-*/
+﻿using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Models;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace NativeProcesses.Core.Native
 {
@@ -81,6 +82,17 @@ namespace NativeProcesses.Core.Native
             PROCESS_MITIGATION_POLICY policy,
             IntPtr lpBuffer,
             int dwLength);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern uint QueryDosDevice(
+            string lpDeviceName,
+            [Out] StringBuilder lpTargetPath,
+            int ucchMax);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint GetLogicalDriveStrings(
+            uint nBufferLength,
+            [Out] char[] lpBuffer);
         #endregion
 
         #region P/Invoke Ntdll
@@ -257,6 +269,62 @@ namespace NativeProcesses.Core.Native
         }
         #endregion
 
+        #region Pfadkonvertierung
+        private static readonly object _deviceMapLock = new object();
+        private static Dictionary<string, string> _deviceMap;
+
+        private static void EnsureDeviceMap()
+        {
+            lock (_deviceMapLock)
+            {
+                if (_deviceMap != null)
+                {
+                    return;
+                }
+
+                _deviceMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                char[] driveBuffer = new char[256];
+                if (GetLogicalDriveStrings(256, driveBuffer) == 0)
+                {
+                    return;
+                }
+
+                foreach (var drive in new string(driveBuffer).Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string driveLetter = drive.Substring(0, 2);
+                    StringBuilder targetPath = new StringBuilder(1024);
+                    if (QueryDosDevice(driveLetter, targetPath, 1024) != 0)
+                    {
+                        _deviceMap[targetPath.ToString()] = driveLetter;
+                    }
+                }
+            }
+        }
+
+        private string ConvertNtPathToWin32Path(string ntPath)
+        {
+            EnsureDeviceMap();
+
+            lock (_deviceMapLock)
+            {
+                foreach (var kvp in _deviceMap)
+                {
+                    if (ntPath.StartsWith(kvp.Key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return kvp.Value + ntPath.Substring(kvp.Key.Length);
+                    }
+                }
+            }
+
+            if (ntPath.StartsWith("\\SystemRoot\\", StringComparison.OrdinalIgnoreCase))
+            {
+                return Environment.ExpandEnvironmentVariables("%SystemRoot%") + ntPath.Substring(11);
+            }
+
+            return ntPath;
+        }
+        #endregion
+        #region Construktor and Dispose
         public ManagedProcess(int pid, ProcessAccessFlags access)
         {
             this.Pid = pid;
@@ -266,7 +334,15 @@ namespace NativeProcesses.Core.Native
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
         }
-
+        public void Dispose()
+        {
+            if (this.Handle != IntPtr.Zero)
+            {
+                CloseHandle(this.Handle);
+                this.Handle = IntPtr.Zero;
+            }
+        }
+        #endregion
         #region Process Control
         public void Kill()
         {
@@ -382,6 +458,58 @@ namespace NativeProcesses.Core.Native
         #endregion
 
         #region Process Info (Slow / New)
+
+        public List<ProcessModuleInfo> GetLoadedModules(IEngineLogger logger)
+        {
+            try
+            {
+                var modules = PebModuleEnumerator.GetModules(this);
+                for (int i = 0; i < modules.Count; i++)
+                {
+                    var mod = modules[i];
+                    mod.FullDllName = ConvertNtPathToWin32Path(mod.FullDllName);
+                    modules[i] = mod;
+                }
+                return modules;
+            }
+            catch (Exception ex)
+            {
+                logger?.Log(LogLevel.Debug, $"PEB module enumeration failed for PID {this.Pid}. Falling back to PSAPI.", ex);
+                try
+                {
+                    return PsApiModuleEnumerator.GetModules(this);
+                }
+                catch (Exception ex2)
+                {
+                    logger?.Log(LogLevel.Error, $"PSAPI module enumeration failed for PID {this.Pid}.", ex2);
+                    throw new Win32Exception($"Failed to enumerate modules with both PEB and PSAPI for PID {this.Pid}. Primary error: {ex.Message}", ex2);
+                }
+            }
+        }
+
+        public List<NativeHandleInfo> GetOpenHandles(IEngineLogger logger)
+        {
+            try
+            {
+                var lister = new NativeHandleLister(logger);
+                var handles = lister.GetProcessHandles(this.Pid);
+                for (int i = 0; i < handles.Count; i++)
+                {
+                    var h = handles[i];
+                    if (!string.IsNullOrEmpty(h.Name))
+                    {
+                        h.Name = ConvertNtPathToWin32Path(h.Name);
+                        handles[i] = h;
+                    }
+                }
+                return handles;
+            }
+            catch (Exception ex)
+            {
+                logger?.Log(LogLevel.Debug, $"Failed to enumerate handles for PID {this.Pid}.", ex);
+                throw;
+            }
+        }
 
         public ProcessIoCounters GetIoCounters()
         {
@@ -618,13 +746,6 @@ namespace NativeProcesses.Core.Native
 
         #endregion
 
-        public void Dispose()
-        {
-            if (this.Handle != IntPtr.Zero)
-            {
-                CloseHandle(this.Handle);
-                this.Handle = IntPtr.Zero;
-            }
-        }
+      
     }
 }

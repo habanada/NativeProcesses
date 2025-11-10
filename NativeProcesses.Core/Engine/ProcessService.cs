@@ -38,7 +38,13 @@ namespace NativeProcesses.Core.Engine
         public bool UseCpuSmoothing { get; set; } = true;
         public double CpuSmoothingFactor { get; set; } = 0.3;
         public ProcessDetailOptions DetailOptions { get; set; }
-
+        public ProcessService(IProcessEventProvider provider, IEngineLogger logger = null, ProcessDetailOptions options = null)
+        {
+            _provider = provider;
+            _logger = logger;
+            _processCache = new ConcurrentDictionary<int, FullProcessInfo>();
+            this.DetailOptions = options ?? new ProcessDetailOptions();
+        }
         public ProcessService(IProcessEventProvider provider, IEngineLogger logger = null)
         {
             _provider = provider;

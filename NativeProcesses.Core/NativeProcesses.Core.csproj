@@ -133,6 +133,13 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Models\NativeHandleInfo.cs" />
+    <Compile Include="Models\ProcessModuleInfo.cs" />
+    <Compile Include="Native\ManagedProcess.cs" />
+    <Compile Include="Native\NativeHandleLister.cs" />
+    <Compile Include="Native\NtProcessInfoStructs.cs" />
+    <Compile Include="Native\PebModuleEnumerator.cs" />
+    <Compile Include="Native\PsApiModuleEnumerator.cs" />
     <Compile Include="Providers\EtwProcessProvider.cs" />
     <Compile Include="Models\FullProcessInfo.cs" />
     <Compile Include="Providers\HybridProcessProvider.cs" />
@@ -140,7 +147,7 @@
     <Compile Include="Providers\IProcessEventProvider.cs" />
     <Compile Include="Engine\IProcessNotifier.cs" />
     <Compile Include="Engine\LogLevel.cs" />
-    <Compile Include="Native\ManagedProcess.cs" />
+    <Compile Include="Native\ManagedProcess_old.cs" />
     <Compile Include="Native\ManagedThread.cs" />
     <Compile Include="Models\NativeProcessInfo.cs" />
     <Compile Include="Native\NativeProcessLister.cs" />

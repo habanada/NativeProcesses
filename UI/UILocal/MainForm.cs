@@ -1,13 +1,15 @@
-﻿using System;
+﻿using NativeProcesses.Core;
+using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Native;
+using NativeProcesses.Core;
+using NativeProcesses.Core.Providers;
+using processlist;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using NativeProcesses.Core;
-using NativeProcesses.Core.Engine;
-using NativeProcesses.Core.Native;
-using NativeProcesses.Core.Providers;
 
 namespace ProcessDemo
 {
@@ -19,13 +21,15 @@ namespace ProcessDemo
         private ContextMenuStrip _menuThread;
         private bool isInitialLoad = true;
         private List<ProcessInfoViewModel> initialLoadBatch = new List<ProcessInfoViewModel>();
+        private IEngineLogger _logger;
 
         public MainForm()
         {
             InitializeComponent();
             this.DoubleBuffered = true;
             DarkTitleBarHelper.Apply(this);
-
+            this.KeyPreview = true;
+            this.KeyDown += new KeyEventHandler(this.MainForm_KeyDown);
             SetupFilterBar();
 
             SetupGrid();
@@ -34,7 +38,66 @@ namespace ProcessDemo
             SetupMenu();
             LoadProcesses();
         }
+        private void MainForm_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.F5)
+            {
+                e.SuppressKeyPress = true;
+                ShowModulesForSelectedProcess();
+            }
+            else if (e.KeyCode == Keys.F6)
+            {
+                e.SuppressKeyPress = true;
+                ShowHandlesForSelectedProcess();
+            }
+        }
+        private async void ShowModulesForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
 
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var modules = await ProcessManager.GetModulesAsync(p.Pid, _logger);
+                using (var detailForm = new DetailForm($"Modules for {p.Name} ({p.Pid})", modules))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not load modules for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+
+        private async void ShowHandlesForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var handles = await ProcessManager.GetHandlesAsync(p.Pid, _logger);
+                using (var detailForm = new DetailForm($"Handles for {p.Name} ({p.Pid})", handles))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not load handles for PID {p.Pid}:\n{ex.Message}\n\n(This often requires administrative privileges.)", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
         private void SetupFilterBar()
         {
             lblFilter.Text = "Filter:";
@@ -210,20 +273,22 @@ namespace ProcessDemo
         private void LoadProcesses()
         {
             var provider = new PollingProcessProvider(TimeSpan.FromSeconds(3));
-            var logger = new ConsoleLogger(richTextBox1);
+            _logger = new ConsoleLogger(richTextBox1);
 
             var detailOptions = new ProcessDetailOptions
+
             {
                 LoadSignatureInfo = true,
                 LoadMitigationInfo = true,
                 LoadExePathAndCommandLine = true,
                 LoadFileVersionInfo = true,
                 LoadIoCounters = true,
-                LoadSecurityInfo = true
+                LoadSecurityInfo = true,
+                LoadModules = false,
+                LoadHandles = false
             };
 
-            _service = new ProcessService(provider, logger);
-            _service.DetailOptions = detailOptions;
+            _service = new ProcessService(provider, _logger, detailOptions);
 
             _allProcessItems = new BindingList<ProcessInfoViewModel>();
             _allProcessItems.ListChanged += Binding_ListChanged;

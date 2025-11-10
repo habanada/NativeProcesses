@@ -2,9 +2,13 @@
    NativeProcesses Framework  |  © 2025 Selahattin Erkoc
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
+using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Models;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace NativeProcesses.Core.Native
 {
@@ -18,6 +22,34 @@ namespace NativeProcesses.Core.Native
             AboveNormal = 0x00008000,
             High = 0x00000080,
             RealTime = 0x00000100
+        }
+        public static Task<List<ProcessModuleInfo>> GetModulesAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                var access = ProcessAccessFlags.QueryInformation |
+                             ProcessAccessFlags.VmRead |
+                             ProcessAccessFlags.QueryLimitedInformation;
+
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    return proc.GetLoadedModules(logger);
+                }
+            });
+        }
+        public static Task<List<NativeHandleInfo>> GetHandlesAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                var access = ProcessAccessFlags.DuplicateHandle;
+
+                access |= ProcessAccessFlags.QueryInformation | ProcessAccessFlags.QueryLimitedInformation;
+
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    return proc.GetOpenHandles(logger);
+                }
+            });
         }
         public static bool Kill(int pid)
         {
