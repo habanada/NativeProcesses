@@ -60,7 +60,9 @@ namespace NativeProcesses.Core.Providers
             bool isRead = data.Opcode == (TraceEventOpcode)10;
             long read = isRead ? data.TransferSize : 0;
             long write = !isRead ? data.TransferSize : 0;
-            _notifier.OnProcessIoUpdate(data.ProcessID, read, write);
+            long readOps = isRead ? 1 : 0;
+            long writeOps = !isRead ? 1 : 0;
+            _notifier.OnProcessIoUpdate(data.ProcessID, read, write, readOps, writeOps);
         }
         public void Stop()
         {

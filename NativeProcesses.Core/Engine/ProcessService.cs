@@ -114,21 +114,24 @@ namespace NativeProcesses.Core.Engine
             }
         }
 
-        void IProcessNotifier.OnProcessStatisticsUpdate(int pid, long workingSet, uint threads, int priority, List<ThreadInfo> threadInfos)
+        void IProcessNotifier.OnProcessStatisticsUpdate(int pid, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority, List<ThreadInfo> threadInfos)
         {
             if (_processCache.TryGetValue(pid, out FullProcessInfo info))
             {
-                info.UpdateFastData(info.Name, workingSet, threads, priority, threadInfos);
+                info.UpdateFastData(info.Name, workingSet, pagedPool, nonPagedPool, privatePageCount, pagefileUsage, threads, priority, threadInfos);
                 ProcessUpdated?.Invoke(info.CreateSnapshot());
             }
         }
 
-        void IProcessNotifier.OnProcessIoUpdate(int pid, long readBytes, long writeBytes)
+        void IProcessNotifier.OnProcessIoUpdate(int pid, long readBytesDelta, long writeBytesDelta, long readOpsDelta, long writeOpsDelta, uint pageFaultDelta)
         {
             if (_processCache.TryGetValue(pid, out FullProcessInfo info))
             {
-                info.TotalReadBytes += readBytes;
-                info.TotalWriteBytes += writeBytes;
+                info.TotalReadBytes += readBytesDelta;
+                info.TotalWriteBytes += writeBytesDelta;
+                info.TotalReadOps += readOpsDelta;
+                info.TotalWriteOps += writeOpsDelta;
+                info.TotalPageFaults += pageFaultDelta;
                 ProcessUpdated?.Invoke(info.CreateSnapshot());
             }
         }
@@ -249,6 +252,23 @@ namespace NativeProcesses.Core.Engine
                             _logger?.Log(LogLevel.Debug, $"Failed to get MitigationInfo for PID {info.Pid}.", ex);
                         }
                     }
+                    if (this.DetailOptions.LoadExtendedStatusFlags)
+                    {
+                        try
+                        {
+                            proc.GetExtendedStatusFlags(out bool isDebuggerAttached, out bool isInJob, out bool isEcoMode);
+                            info.IsDebuggerAttached = isDebuggerAttached;
+                            info.IsInJob = isInJob;
+                            info.IsEcoMode = isEcoMode;
+                        }
+                        catch (Win32Exception)
+                        { } //denoise
+                        catch (Exception ex)
+                        {
+                            _logger?.Log(LogLevel.Debug, $"Failed to get ExtendedStatusFlags for PID {info.Pid}.", ex);
+                        }
+                    }
+
                 }
             }
             catch (Win32Exception ex)

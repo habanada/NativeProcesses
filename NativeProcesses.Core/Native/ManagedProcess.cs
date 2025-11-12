@@ -17,6 +17,11 @@ namespace NativeProcesses.Core.Native
 
         private const uint STATUS_SUCCESS = 0x00000000;
 
+        private const int ProcessJobObjectInformation = 7;
+        private const int ProcessDebugObjectHandle = 30;
+        private const int ProcessPowerThrottlingState = 45;
+
+
         #region P/Invoke Kernel32
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr OpenProcess(
@@ -138,6 +143,16 @@ namespace NativeProcesses.Core.Native
         #endregion
 
         #region Structs & Enums
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_POWER_THROTTLING_STATE
+        {
+            public uint Version;
+            public uint ControlMask;
+            public uint StateMask;
+        }
+
+        private const uint POWER_THROTTLING_PROCESS_ENFORCE = 0x1;
+
         [StructLayout(LayoutKind.Sequential)]
         private struct PROCESS_BASIC_INFORMATION
         {
@@ -459,6 +474,56 @@ namespace NativeProcesses.Core.Native
 
         #region Process Info (Slow / New)
 
+        public void GetExtendedStatusFlags(out bool isDebuggerAttached, out bool isInJob, out bool isEcoMode)
+        {
+            isDebuggerAttached = false;
+            isInJob = false;
+            isEcoMode = false;
+
+            IntPtr buffer = IntPtr.Zero;
+            try
+            {
+                uint returnLength;
+
+                buffer = Marshal.AllocHGlobal(IntPtr.Size);
+
+                int statusJob = NtQueryInformationProcess(this.Handle, ProcessJobObjectInformation, buffer, (uint)IntPtr.Size, out returnLength);
+                if (statusJob == 0 && Marshal.ReadIntPtr(buffer) != IntPtr.Zero)
+                {
+                    isInJob = true;
+                }
+
+                int statusDebug = NtQueryInformationProcess(this.Handle, ProcessDebugObjectHandle, buffer, (uint)IntPtr.Size, out returnLength);
+                if (statusDebug == 0 && Marshal.ReadIntPtr(buffer) != IntPtr.Zero)
+                {
+                    isDebuggerAttached = true;
+                }
+
+                Marshal.FreeHGlobal(buffer);
+
+                int size = Marshal.SizeOf(typeof(PROCESS_POWER_THROTTLING_STATE));
+                buffer = Marshal.AllocHGlobal(size);
+                int statusPower = NtQueryInformationProcess(this.Handle, ProcessPowerThrottlingState, buffer, (uint)size, out returnLength);
+                if (statusPower == 0)
+                {
+                    PROCESS_POWER_THROTTLING_STATE state = (PROCESS_POWER_THROTTLING_STATE)Marshal.PtrToStructure(buffer, typeof(PROCESS_POWER_THROTTLING_STATE));
+                    if ((state.ControlMask & POWER_THROTTLING_PROCESS_ENFORCE) == POWER_THROTTLING_PROCESS_ENFORCE)
+                    {
+                        isEcoMode = true;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+        }
         public List<ProcessModuleInfo> GetLoadedModules(IEngineLogger logger)
         {
             try

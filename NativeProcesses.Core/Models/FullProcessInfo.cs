@@ -71,6 +71,55 @@ namespace NativeProcesses.Core
             set { lock (_updateLock) { _totalWriteBytes = value; } }
         }
 
+        private long _totalReadOps;
+        public long TotalReadOps
+        {
+            get { lock (_updateLock) { return _totalReadOps; } }
+            set { lock (_updateLock) { _totalReadOps = value; } }
+        }
+
+        private long _totalWriteOps;
+        public long TotalWriteOps
+        {
+            get { lock (_updateLock) { return _totalWriteOps; } }
+            set { lock (_updateLock) { _totalWriteOps = value; } }
+        }
+
+        private long _totalPageFaults;
+        public long TotalPageFaults
+        {
+            get { lock (_updateLock) { return _totalPageFaults; } }
+            set { lock (_updateLock) { _totalPageFaults = value; } }
+        }
+
+        private long _pagedPoolUsage;
+        public long PagedPoolUsage
+        {
+            get { lock (_updateLock) { return _pagedPoolUsage; } }
+            set { lock (_updateLock) { _pagedPoolUsage = value; } }
+        }
+
+        private long _nonPagedPoolUsage;
+        public long NonPagedPoolUsage
+        {
+            get { lock (_updateLock) { return _nonPagedPoolUsage; } }
+            set { lock (_updateLock) { _nonPagedPoolUsage = value; } }
+        }
+
+        private long _privatePageCount;
+        public long PrivatePageCount
+        {
+            get { lock (_updateLock) { return _privatePageCount; } }
+            set { lock (_updateLock) { _privatePageCount = value; } }
+        }
+
+        private long _pagefileUsage;
+        public long PagefileUsage
+        {
+            get { lock (_updateLock) { return _pagefileUsage; } }
+            set { lock (_updateLock) { _pagefileUsage = value; } }
+        }
+
         private double _cpuUsagePercent;
         public double CpuUsagePercent
         {
@@ -147,6 +196,28 @@ namespace NativeProcesses.Core
         }
 
 
+        private bool _isDebuggerAttached;
+        public bool IsDebuggerAttached
+        {
+            get { lock (_updateLock) { return _isDebuggerAttached; } }
+            set { lock (_updateLock) { _isDebuggerAttached = value; } }
+        }
+
+        private bool _isInJob;
+        public bool IsInJob
+        {
+            get { lock (_updateLock) { return _isInJob; } }
+            set { lock (_updateLock) { _isInJob = value; } }
+        }
+
+        private bool _isEcoMode;
+        public bool IsEcoMode
+        {
+            get { lock (_updateLock) { return _isEcoMode; } }
+            set { lock (_updateLock) { _isEcoMode = value; } }
+        }
+
+
         public volatile bool IsLoadingDetails;
         public volatile bool IsDetailsLoaded;
         public FullProcessInfo()
@@ -163,23 +234,30 @@ namespace NativeProcesses.Core
             this._workingSet = workingSet;
             this._rawNumberOfThreads = threads;
             this._priority = priority;
-            this._exePath = "[Lädt...]";
-            this._commandLine = "[Lädt...]";
+            this._exePath = "[Loading...]";
+            this._commandLine = "[Loading...]";
             this._threadsList = new List<ThreadInfo>();
             this._securityInfo = new ProcessSecurityInfo();
             this._mitigationInfo = new ProcessMitigationInfo();
             this._signatureInfo = new ProcessSignatureInfo();
-            this._fileCompany = "[Lädt...]";
-            this._fileDescription = "[Lädt...]";
-            this._fileVersion = "[Lädt...]";
+            this._fileCompany = "[Loading...]";
+            this._fileDescription = "[Loading...]";
+            this._fileVersion = "[Loading...]";
+            this._isDebuggerAttached = false;
+            this._isInJob = false;
+            this._isEcoMode = false;
         }
 
-        public void UpdateFastData(string name, long workingSet, uint threads, int priority, List<ThreadInfo> threadInfos)
+        public void UpdateFastData(string name, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority, List<ThreadInfo> threadInfos)
         {
             lock (_updateLock)
             {
                 this.Name = name;
                 this.WorkingSetSize = workingSet;
+                this.PagedPoolUsage = pagedPool;
+                this.NonPagedPoolUsage = nonPagedPool;
+                this.PrivatePageCount = privatePageCount;
+                this.PagefileUsage = pagefileUsage;
                 this.NumberOfThreads = threads;
                 this.BasePriority = priority;
             }
@@ -205,12 +283,16 @@ namespace NativeProcesses.Core
             return copy;
         }
 
-        public void UpdateFastData(string name, long workingSet, uint threads, int priority)
+        public void UpdateFastData(string name, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority)
         {
             lock (_updateLock)
             {
                 this.Name = name;
                 this.WorkingSetSize = workingSet;
+                this.PagedPoolUsage = pagedPool;
+                this.NonPagedPoolUsage = nonPagedPool;
+                this.PrivatePageCount = privatePageCount;
+                this.PagefileUsage = pagefileUsage;
                 this.NumberOfThreads = threads;
                 this.BasePriority = priority;
             }

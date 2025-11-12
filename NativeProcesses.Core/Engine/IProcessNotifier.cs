@@ -11,8 +11,8 @@ namespace NativeProcesses.Core.Engine
     {
         void OnProcessStarted(int pid, string name);
         void OnProcessStopped(int pid);
-        void OnProcessStatisticsUpdate(int pid, long workingSet, uint threads, int priority, List<ThreadInfo> threadInfos);
-        void OnProcessIoUpdate(int pid, long readBytes, long writeBytes);
+        void OnProcessStatisticsUpdate(int pid, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority, List<ThreadInfo> threadInfos);
+        void OnProcessIoUpdate(int pid, long readBytesDelta, long writeBytesDelta, long readOpsDelta, long writeOpsDelta, uint pageFaultDelta);
         void OnProcessCpuUpdate(int pid, double cpuPercent);
     }
 }

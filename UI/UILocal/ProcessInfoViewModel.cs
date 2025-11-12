@@ -76,6 +76,56 @@ namespace ProcessDemo
             set { _totalWriteBytes = value; Notify(); }
         }
 
+
+        private long _totalReadOps;
+        public long TotalReadOps
+        {
+            get { return _totalReadOps; }
+            set { _totalReadOps = value; Notify(); }
+        }
+
+        private long _totalWriteOps;
+        public long TotalWriteOps
+        {
+            get { return _totalWriteOps; }
+            set { _totalWriteOps = value; Notify(); }
+        }
+
+        private long _totalPageFaults;
+        public long TotalPageFaults
+        {
+            get { return _totalPageFaults; }
+            set { _totalPageFaults = value; Notify(); }
+        }
+
+        private long _pagedPool;
+        public long PagedPoolUsage
+        {
+            get { return _pagedPool; }
+            set { _pagedPool = value; Notify(); }
+        }
+
+        private long _nonPagedPool;
+        public long NonPagedPoolUsage
+        {
+            get { return _nonPagedPool; }
+            set { _nonPagedPool = value; Notify(); }
+        }
+
+        private long _privatePageCount;
+        public long PrivatePageCount
+        {
+            get { return _privatePageCount; }
+            set { _privatePageCount = value; Notify(); }
+        }
+
+        private long _pagefileUsage;
+        public long PagefileUsage
+        {
+            get { return _pagefileUsage; }
+            set { _pagefileUsage = value; Notify(); }
+        }
+
         private double _cpuUsagePercent;
         public double CpuUsagePercent
         {
@@ -197,36 +247,73 @@ namespace ProcessDemo
             set { _signerName = value; Notify(); }
         }
 
+        private bool _isDebuggerAttached;
+        public bool IsDebuggerAttached
+        {
+            get { return _isDebuggerAttached; }
+            set { _isDebuggerAttached = value; Notify(); }
+        }
+
+        private bool _isInJob;
+        public bool IsInJob
+        {
+            get { return _isInJob; }
+            set { _isInJob = value; Notify(); }
+        }
+
+        private bool _isEcoMode;
+        public bool IsEcoMode
+        {
+            get { return _isEcoMode; }
+            set { _isEcoMode = value; Notify(); }
+        }
+        private ulong _ioOther;
+        public ulong IoOther
+        {
+            get { return _ioOther; }
+            set { _ioOther = value; Notify(); }
+        }
+
         public ProcessInfoViewModel(FullProcessInfo source)
         {
             this.Pid = source.Pid;
             this.Threads = new BindingList<ThreadInfoViewModel>();
             this.ApplyUpdate(source);
         }
-
         public void ApplyUpdate(FullProcessInfo source)
         {
             this.Name = source.Name;
             this.WorkingSetSize = source.WorkingSetSize;
+            this.PagedPoolUsage = source.PagedPoolUsage;
+            this.NonPagedPoolUsage = source.NonPagedPoolUsage;
+            this.PrivatePageCount = source.PrivatePageCount;
+            this.PagefileUsage = source.PagefileUsage;
             this.NumberOfThreads = source.NumberOfThreads;
             this.BasePriority = source.BasePriority;
             this.ExePath = source.ExePath;
             this.CommandLine = source.CommandLine;
             this.TotalReadBytes = source.TotalReadBytes;
             this.TotalWriteBytes = source.TotalWriteBytes;
+            this.TotalReadOps = source.TotalReadOps;
+            this.TotalWriteOps = source.TotalWriteOps;
+            this.TotalPageFaults = source.TotalPageFaults;
             this.CpuUsagePercent = source.CpuUsagePercent;
+
+            this.IsDebuggerAttached = source.IsDebuggerAttached;
+            this.IsInJob = source.IsInJob;
+            this.IsEcoMode = source.IsEcoMode;
 
             this.UserName = source.SecurityInfo.UserName;
             this.IntegrityLevel = source.SecurityInfo.IntegrityLevel;
             this.ImageType = source.SecurityInfo.ImageType;
             this.IsElevated = source.SecurityInfo.IsElevated;
-
             this.FileCompany = source.FileCompany;
             this.FileDescription = source.FileDescription;
             this.FileVersion = source.FileVersion;
 
             this.IoReads = source.IoCounters.ReadOperationCount;
             this.IoWrites = source.IoCounters.WriteOperationCount;
+            this.IoOther = source.IoCounters.OtherOperationCount;
 
             this.DepEnabled = source.MitigationInfo.DepEnabled;
             this.AslrEnabled = source.MitigationInfo.AslrEnabled;
@@ -252,7 +339,6 @@ namespace ProcessDemo
             }
 
             var sourceThreadIds = new HashSet<int>(source.Threads.Select(t => t.ThreadId));
-
             var threadsToRemove = this.Threads.Where(t => !sourceThreadIds.Contains(t.ThreadId)).ToList();
             foreach (var oldThread in threadsToRemove)
             {

@@ -14,5 +14,6 @@ namespace NativeProcesses.Core
         public bool LoadFileVersionInfo { get; set; } = true;
         public bool LoadModules { get; set; } = false;
         public bool LoadHandles { get; set; } = false;
+        public bool LoadExtendedStatusFlags { get; set; } = true;
     }    
 }

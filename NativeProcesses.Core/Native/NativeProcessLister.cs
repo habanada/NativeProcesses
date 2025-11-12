@@ -178,18 +178,34 @@ namespace NativeProcesses.Core.Native
                     processes.Add(new NativeProcessInfo
                     {
                         Pid = (int)procInfo.UniqueProcessId,
+
                         Name = name,
                         BasePriority = procInfo.BasePriority,
                         NumberOfThreads = procInfo.NumberOfThreads,
                         HandleCount = procInfo.HandleCount,
+
                         SessionId = procInfo.SessionId,
                         CreateTime = procInfo.CreateTime,
                         UserTime = procInfo.UserTime,
-                        KernelTime = procInfo.KernelTime,
+                        KernelTime =
+                        procInfo.KernelTime,
                         WorkingSetSize = (long)procInfo.WorkingSetSize,
                         PeakWorkingSetSize = (long)procInfo.PeakWorkingSetSize,
                         PrivatePageCount = (long)procInfo.PrivatePageCount,
+
                         PagefileUsage = (long)procInfo.PagefileUsage,
+
+                        PageFaultCount = procInfo.PageFaultCount,
+                        PagedPoolUsage = (long)procInfo.QuotaPagedPoolUsage,
+                        NonPagedPoolUsage = (long)procInfo.QuotaNonPagedPoolUsage,
+
+                        ReadOperationCount = procInfo.ReadOperationCount,
+                        WriteOperationCount = procInfo.WriteOperationCount,
+                        OtherOperationCount = procInfo.OtherOperationCount,
+                        ReadTransferCount = procInfo.ReadTransferCount,
+                        WriteTransferCount = procInfo.WriteTransferCount,
+                        OtherTransferCount = procInfo.OtherTransferCount,
+
                         Threads = threads
                     });
 

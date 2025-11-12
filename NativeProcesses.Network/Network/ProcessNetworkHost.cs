@@ -53,12 +53,15 @@ namespace NativeProcesses.Network
             {
                 Pid = info.Pid,
                 Cpu = info.CpuUsagePercent,
-                WorkingSet = info.WorkingSetSize,
+                WorkingSet
+                = info.WorkingSetSize,
                 ThreadCount = (int)info.NumberOfThreads,
 
                 BasePriority = info.BasePriority,
                 TotalReadBytes = info.TotalReadBytes,
-                TotalWriteBytes = info.TotalWriteBytes
+                TotalWriteBytes = info.TotalWriteBytes,
+                TotalReadOps = info.TotalReadOps,
+                TotalWriteOps = info.TotalWriteOps
             };
             Task.Run(() => _server.BroadcastAsync("process_volatile_update", volatileUpdate));
         }

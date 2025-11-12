@@ -23,6 +23,18 @@ namespace NativeProcesses.Core
         public long PeakWorkingSetSize;
         public long PrivatePageCount;
         public long PagefileUsage;
+
+        public uint PageFaultCount;
+        public long PagedPoolUsage;
+        public long NonPagedPoolUsage;
+
+        public long ReadOperationCount;
+        public long WriteOperationCount;
+        public long OtherOperationCount;
+        public long ReadTransferCount;
+        public long WriteTransferCount;
+        public long OtherTransferCount;
+
         public List<NativeProcessLister.SYSTEM_THREAD_INFORMATION> Threads;
     }
 }
