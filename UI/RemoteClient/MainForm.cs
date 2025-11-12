@@ -302,10 +302,10 @@ namespace ProcessDemo
                         itemToUpdateVolatile?.ApplyVolatileUpdate(volatileUpdate);
                         break;
                     case "thread_priorities_info":
-                        var info = JsonConvert.DeserializeObject<NativeProcesses.Core.Models.ExtendedThreadInfo>(data);
-                        string message = $"Thread: {info.ThreadId}\n\n";
-                        message += $"I/O Priority: {info.IoPriority}\n";
-                        message += $"Memory Priority: {info.MemoryPriority}";
+                        var thread_priorities_info = JsonConvert.DeserializeObject<NativeProcesses.Core.Models.ExtendedThreadInfo>(data);
+                        string message = $"Thread: {thread_priorities_info.ThreadId}\n\n";
+                        message += $"I/O Priority: {thread_priorities_info.IoPriority}\n";
+                        message += $"Memory Priority: {thread_priorities_info.MemoryPriority}";
                         MessageBox.Show(this, message, "Thread Priorities", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         break;
 

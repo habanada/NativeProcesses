@@ -62,7 +62,7 @@ namespace NativeProcesses.Core.Providers
             long write = !isRead ? data.TransferSize : 0;
             long readOps = isRead ? 1 : 0;
             long writeOps = !isRead ? 1 : 0;
-            _notifier.OnProcessIoUpdate(data.ProcessID, read, write, readOps, writeOps);
+            _notifier.OnProcessIoUpdate(data.ProcessID, read, write, readOps, writeOps,0);
         }
         public void Stop()
         {

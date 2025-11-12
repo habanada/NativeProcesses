@@ -98,6 +98,15 @@ namespace NativeProcesses.Core.Native
         private static extern uint GetLogicalDriveStrings(
             uint nBufferLength,
             [Out] char[] lpBuffer);
+
+        [DllImport("ntdll.dll", SetLastError = true)]
+        private static extern int NtQueryVirtualMemory(
+            IntPtr ProcessHandle,
+            IntPtr BaseAddress,
+            int MemoryInformationClass,
+            IntPtr MemoryInformation,
+            UIntPtr MemoryInformationLength,
+            out UIntPtr ReturnLength);
         #endregion
 
         #region P/Invoke Ntdll
@@ -281,6 +290,55 @@ namespace NativeProcesses.Core.Native
         private struct PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY
         {
             public uint Flags;
+        }
+        private enum MEMORY_INFORMATION_CLASS
+        {
+            MemoryBasicInformation = 0
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MEMORY_BASIC_INFORMATION
+        {
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public uint AllocationProtect;
+            public ushort PartitionId;
+            public IntPtr RegionSize;
+            public uint State;
+            public uint Protect;
+            public uint Type;
+        }
+
+        [Flags]
+        public enum MemoryState : uint
+        {
+            MEM_COMMIT = 0x1000,
+            MEM_RESERVE = 0x2000,
+            MEM_FREE = 0x10000
+        }
+
+        [Flags]
+        public enum MemoryType : uint
+        {
+            MEM_PRIVATE = 0x20000,
+            MEM_MAPPED = 0x40000,
+            MEM_IMAGE = 0x1000000
+        }
+
+        [Flags]
+        public enum MemoryProtect : uint
+        {
+            PAGE_NOACCESS = 0x01,
+            PAGE_READONLY = 0x02,
+            PAGE_READWRITE = 0x04,
+            PAGE_WRITECOPY = 0x08,
+            PAGE_EXECUTE = 0x10,
+            PAGE_EXECUTE_READ = 0x20,
+            PAGE_EXECUTE_READWRITE = 0x40,
+            PAGE_EXECUTE_WRITECOPY = 0x80,
+            PAGE_GUARD = 0x100,
+            PAGE_NOCACHE = 0x200,
+            PAGE_WRITECOMBINE = 0x400
         }
         #endregion
 
@@ -808,9 +866,70 @@ namespace NativeProcesses.Core.Native
             }
             return info;
         }
+        public List<Models.VirtualMemoryRegion> GetVirtualMemoryRegions()
+        {
+            var regions = new List<Models.VirtualMemoryRegion>();
+            long currentAddress = 0;
+            long maxAddress = Environment.Is64BitProcess ? 0x7FFFFFFFFFFF : 0x7FFFFFFF;
 
+            IntPtr buffer = IntPtr.Zero;
+            try
+            {
+                int mbiSize = Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION));
+                buffer = Marshal.AllocHGlobal(mbiSize);
+
+                while (currentAddress < maxAddress)
+                {
+                    int status = NtQueryVirtualMemory(
+                        this.Handle,
+                        (IntPtr)currentAddress,
+                        (int)MEMORY_INFORMATION_CLASS.MemoryBasicInformation,
+                        buffer,
+                        (UIntPtr)mbiSize,
+                        out UIntPtr returnLength
+                    );
+
+                    if (status != 0)
+                    {
+                        break;
+                    }
+
+                    MEMORY_BASIC_INFORMATION mbi = (MEMORY_BASIC_INFORMATION)Marshal.PtrToStructure(buffer, typeof(MEMORY_BASIC_INFORMATION));
+
+                    if ((long)mbi.RegionSize == 0)
+                    {
+                        break;
+                    }
+
+                    regions.Add(new Models.VirtualMemoryRegion(
+                        mbi.BaseAddress,
+                        mbi.AllocationBase,
+                        (long)mbi.RegionSize,
+                        mbi.State,
+                        mbi.Type,
+                        mbi.Protect,
+                        mbi.AllocationProtect
+                    ));
+
+                    currentAddress = (long)mbi.BaseAddress + (long)mbi.RegionSize;
+
+                    if (currentAddress < 0)
+                    {
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+            return regions;
+        }
         #endregion
 
-      
+
     }
 }

@@ -68,6 +68,18 @@ namespace NativeProcesses.Core.Native
                 }
             });
         }
+        public static Task<List<Models.VirtualMemoryRegion>> GetVirtualMemoryRegionsAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                var access = ProcessAccessFlags.QueryInformation;
+
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    return proc.GetVirtualMemoryRegions();
+                }
+            });
+        }
         public static bool Kill(int pid)
         {
             try

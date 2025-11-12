@@ -136,6 +136,7 @@
     <Compile Include="Models\ExtendedThreadInfo.cs" />
     <Compile Include="Models\NativeHandleInfo.cs" />
     <Compile Include="Models\ProcessModuleInfo.cs" />
+    <Compile Include="Models\VirtualMemoryRegion.cs" />
     <Compile Include="Native\ManagedProcess.cs" />
     <Compile Include="Native\NativeHandleLister.cs" />
     <Compile Include="Native\NtProcessInfoStructs.cs" />

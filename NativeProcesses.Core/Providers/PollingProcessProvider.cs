@@ -176,41 +176,41 @@ namespace NativeProcesses.Core.Providers
             _ioWriteOpsCache[info.Pid] = newWriteOps;
             _pageFaultCache[info.Pid] = newPageFaults;
         }
-        private void CalculateIoUsage(NativeProcessInfo info)
-        {
-            long newReadBytes = info.ReadTransferCount;
-            long newWriteBytes = info.WriteTransferCount;
-            long newReadOps = info.ReadOperationCount;
-            long newWriteOps = info.WriteOperationCount;
+        //private void CalculateIoUsage(NativeProcessInfo info)
+        //{
+        //    long newReadBytes = info.ReadTransferCount;
+        //    long newWriteBytes = info.WriteTransferCount;
+        //    long newReadOps = info.ReadOperationCount;
+        //    long newWriteOps = info.WriteOperationCount;
 
-            bool hasLastIo = _ioReadCache.TryGetValue(info.Pid, out long lastReadBytes);
-            _ioWriteCache.TryGetValue(info.Pid, out long lastWriteBytes);
-            _ioReadOpsCache.TryGetValue(info.Pid, out long lastReadOps);
-            _ioWriteOpsCache.TryGetValue(info.Pid, out long lastWriteOps);
+        //    bool hasLastIo = _ioReadCache.TryGetValue(info.Pid, out long lastReadBytes);
+        //    _ioWriteCache.TryGetValue(info.Pid, out long lastWriteBytes);
+        //    _ioReadOpsCache.TryGetValue(info.Pid, out long lastReadOps);
+        //    _ioWriteOpsCache.TryGetValue(info.Pid, out long lastWriteOps);
 
-            if (hasLastIo)
-            {
-                long readDelta = newReadBytes - lastReadBytes;
-                long writeDelta = newWriteBytes - lastWriteBytes;
-                long readOpsDelta = newReadOps - lastReadOps;
-                long writeOpsDelta = newWriteOps - lastWriteOps;
+        //    if (hasLastIo)
+        //    {
+        //        long readDelta = newReadBytes - lastReadBytes;
+        //        long writeDelta = newWriteBytes - lastWriteBytes;
+        //        long readOpsDelta = newReadOps - lastReadOps;
+        //        long writeOpsDelta = newWriteOps - lastWriteOps;
 
-                if (readDelta < 0) readDelta = 0;
-                if (writeDelta < 0) writeDelta = 0;
-                if (readOpsDelta < 0) readOpsDelta = 0;
-                if (writeOpsDelta < 0) writeOpsDelta = 0;
+        //        if (readDelta < 0) readDelta = 0;
+        //        if (writeDelta < 0) writeDelta = 0;
+        //        if (readOpsDelta < 0) readOpsDelta = 0;
+        //        if (writeOpsDelta < 0) writeOpsDelta = 0;
 
-                if (readDelta > 0 || writeDelta > 0 || readOpsDelta > 0 || writeOpsDelta > 0)
-                {
-                    _notifier.OnProcessIoUpdate(info.Pid, readDelta, writeDelta, readOpsDelta, writeOpsDelta);
-                }
-            }
+        //        if (readDelta > 0 || writeDelta > 0 || readOpsDelta > 0 || writeOpsDelta > 0)
+        //        {
+        //            _notifier.OnProcessIoUpdate(info.Pid, readDelta, writeDelta, readOpsDelta, writeOpsDelta, 0);
+        //        }
+        //    }
 
-            _ioReadCache[info.Pid] = newReadBytes;
-            _ioWriteCache[info.Pid] = newWriteBytes;
-            _ioReadOpsCache[info.Pid] = newReadOps;
-            _ioWriteOpsCache[info.Pid] = newWriteOps;
-        }
+        //    _ioReadCache[info.Pid] = newReadBytes;
+        //    _ioWriteCache[info.Pid] = newWriteBytes;
+        //    _ioReadOpsCache[info.Pid] = newReadOps;
+        //    _ioWriteOpsCache[info.Pid] = newWriteOps;
+        //}
         public void Stop() { _cts?.Cancel(); }
         public void Dispose() { Stop(); }
 

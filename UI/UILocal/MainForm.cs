@@ -60,6 +60,11 @@ namespace ProcessDemo
                 e.SuppressKeyPress = true;
                 ResolveSelectedThreadAddress();
             }
+            else if (e.KeyCode == Keys.F9)
+            {
+                e.SuppressKeyPress = true;
+                ShowMemoryRegionsForSelectedProcess();
+            }
         }
         private async void ShowPrioritiesForSelectedThread()
         {
@@ -244,6 +249,10 @@ namespace ProcessDemo
             _menuThread.Items.Add("Suspend Thread", null, (s, e) => SuspendSelectedThread());
             _menuThread.Items.Add("Resume Thread", null, (s, e) => ResumeSelectedThread());
             _menuThread.Items.Add("-");
+            _menu.Items.Add("Show Modules (F5)", null, (s, e) => ShowModulesForSelectedProcess());
+            _menu.Items.Add("Show Handles (F6)", null, (s, e) => ShowHandlesForSelectedProcess());
+
+            _menu.Items.Add("Show Memory Regions (F9)", null, (s, e) => ShowMemoryRegionsForSelectedProcess());
             _menuThread.Items.Add("Show Priorities (F7)", null, (s, e) => ShowPrioritiesForSelectedThread());
             _menuThread.Items.Add("Resolve Start Address (F8)", null, (s, e) => ResolveSelectedThreadAddress());
             gridThreads.ContextMenuStrip = _menuThread;
@@ -308,6 +317,29 @@ namespace ProcessDemo
         //    initialLoadTimer.Tick += InitialLoadTimer_Tick;
         //    initialLoadTimer.Start();
         //}
+        private async void ShowMemoryRegionsForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var regions = await ProcessManager.GetVirtualMemoryRegionsAsync(p.Pid, _logger);
+                using (var detailForm = new DetailForm($"Memory Regions for {p.Name} ({p.Pid})", regions))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not load memory regions for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
         private async void ResolveSelectedThreadAddress()
         {
             var p = SelectedProcess;
