@@ -3,6 +3,7 @@
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
 
+using System;
 using static NativeProcesses.Core.Native.NativeProcessLister;
 
 namespace NativeProcesses.Core
@@ -13,6 +14,7 @@ namespace NativeProcesses.Core
         public int BasePriority { get; private set; }
         public long KernelTime { get; private set; }
         public long UserTime { get; private set; }
+        public IntPtr StartAddress { get; private set; }
         public ThreadInfo()
         {
         }
@@ -22,6 +24,7 @@ namespace NativeProcesses.Core
             this.BasePriority = rawInfo.BasePriority;
             this.KernelTime = rawInfo.KernelTime;
             this.UserTime = rawInfo.UserTime;
+            this.StartAddress = rawInfo.StartAddress;
         }
 
         public ThreadInfo CreateSnapshot()

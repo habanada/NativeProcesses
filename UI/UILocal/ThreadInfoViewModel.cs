@@ -2,9 +2,10 @@
    NativeProcesses Framework  |  © 2025 Selahattin Erkoc
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
+using NativeProcesses.Core;
+using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using NativeProcesses.Core;
 
 namespace ProcessDemo
 {
@@ -17,7 +18,12 @@ namespace ProcessDemo
         }
 
         public int ThreadId { get; private set; }
-
+        private IntPtr _startAddress;
+        public IntPtr StartAddress
+        {
+            get { return _startAddress; }
+            set { _startAddress = value; Notify(); }
+        }
         private int _priority;
         public int BasePriority
         {
@@ -39,6 +45,7 @@ namespace ProcessDemo
             set { _userTime = value; Notify(); }
         }
 
+
         public ThreadInfoViewModel(ThreadInfo source)
         {
             this.ThreadId = source.ThreadId;
@@ -50,6 +57,7 @@ namespace ProcessDemo
             this.BasePriority = source.BasePriority;
             this.KernelTime = source.KernelTime;
             this.UserTime = source.UserTime;
+            this.StartAddress = source.StartAddress;
         }
     }
 }

@@ -55,6 +55,11 @@ namespace ProcessDemo
                 e.SuppressKeyPress = true;
                 ShowPrioritiesForSelectedThread();
             }
+            else if (e.KeyCode == Keys.F8)
+            {
+                e.SuppressKeyPress = true;
+                ResolveSelectedThreadAddress();
+            }
         }
         private async void ShowPrioritiesForSelectedThread()
         {
@@ -240,6 +245,7 @@ namespace ProcessDemo
             _menuThread.Items.Add("Resume Thread", null, (s, e) => ResumeSelectedThread());
             _menuThread.Items.Add("-");
             _menuThread.Items.Add("Show Priorities (F7)", null, (s, e) => ShowPrioritiesForSelectedThread());
+            _menuThread.Items.Add("Resolve Start Address (F8)", null, (s, e) => ResolveSelectedThreadAddress());
             gridThreads.ContextMenuStrip = _menuThread;
         }
 
@@ -302,6 +308,63 @@ namespace ProcessDemo
         //    initialLoadTimer.Tick += InitialLoadTimer_Tick;
         //    initialLoadTimer.Start();
         //}
+        private async void ResolveSelectedThreadAddress()
+        {
+            var p = SelectedProcess;
+            var t = SelectedThread;
+            if (p == null || t == null)
+            {
+                return;
+            }
+
+            if (t.StartAddress == IntPtr.Zero)
+            {
+                MessageBox.Show(this, $"Thread {t.ThreadId} has no valid start address (0x0).", "Resolve Address", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var modules = await ProcessManager.GetModulesAsync(p.Pid, _logger);
+                string resolvedName = "0x" + t.StartAddress.ToString("X");
+                bool found = false;
+
+                foreach (var mod in modules)
+                {
+                    if (mod.SizeOfImage == 0)
+                    {
+                        continue;
+                    }
+
+                    IntPtr start = mod.DllBase;
+                    IntPtr end = IntPtr.Add(start, (int)mod.SizeOfImage);
+
+                    if (t.StartAddress.ToInt64() >= start.ToInt64() && t.StartAddress.ToInt64() < end.ToInt64())
+                    {
+                        long offset = t.StartAddress.ToInt64() - start.ToInt64();
+                        resolvedName = $"{mod.BaseDllName}+0x{offset:X}";
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    resolvedName += " (No module found for this address range)";
+                }
+
+                MessageBox.Show(this, $"Thread: {t.ThreadId}\nStart Address: {resolvedName}", "Resolve Address", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not resolve address for TID {t.ThreadId}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
         private void LoadProcesses()
         {
             var provider = new PollingProcessProvider(TimeSpan.FromSeconds(3));
