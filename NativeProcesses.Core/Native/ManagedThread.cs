@@ -40,6 +40,17 @@ namespace NativeProcesses.Core.Native
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool CloseHandle(IntPtr hObject);
 
+        [DllImport("ntdll.dll", SetLastError = true)]
+        private static extern int NtQueryInformationThread(
+            IntPtr ThreadHandle,
+            int ThreadInformationClass,
+            IntPtr ThreadInformation,
+            uint ThreadInformationLength,
+            out uint ReturnLength);
+
+        private const int ThreadIoPriority = 33;
+        private const int ThreadPagePriority = 39;
+
         public IntPtr Handle { get; private set; }
         public int ThreadId { get; private set; }
 
@@ -77,6 +88,38 @@ namespace NativeProcesses.Core.Native
             {
                 CloseHandle(this.Handle);
                 this.Handle = IntPtr.Zero;
+            }
+        }
+        public void GetExtendedPriorities(out Models.IoPriorityHint ioPriority, out Models.MemoryPriorityHint memPriority)
+        {
+            ioPriority = Models.IoPriorityHint.Unknown;
+            memPriority = Models.MemoryPriorityHint.Unknown;
+
+            IntPtr buffer = IntPtr.Zero;
+            try
+            {
+                uint returnLength;
+                int size = sizeof(int);
+                buffer = Marshal.AllocHGlobal(size);
+
+                int statusIo = NtQueryInformationThread(this.Handle, ThreadIoPriority, buffer, (uint)size, out returnLength);
+                if (statusIo == 0)
+                {
+                    ioPriority = (Models.IoPriorityHint)Marshal.ReadInt32(buffer);
+                }
+
+                int statusMem = NtQueryInformationThread(this.Handle, ThreadPagePriority, buffer, (uint)size, out returnLength);
+                if (statusMem == 0)
+                {
+                    memPriority = (Models.MemoryPriorityHint)Marshal.ReadInt32(buffer);
+                }
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
             }
         }
     }

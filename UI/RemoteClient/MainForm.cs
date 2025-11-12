@@ -2,15 +2,16 @@
    NativeProcesses Framework  |  © 2025 Selahattin Erkoc
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
-using Newtonsoft.Json;
+using NativeProcesses.Core;
 using NativeProcesses.Network;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Windows.Forms;
-using NativeProcesses.Core;
 
 namespace ProcessDemo
 {
@@ -19,6 +20,7 @@ namespace ProcessDemo
         private SecureTcpClient _client;
         private BindingList<ProcessInfoViewModel> _allProcessItems;
         private ContextMenuStrip _menu;
+        private ContextMenuStrip _menuThread;
 
         private Panel panelTop;
         private TextBox txtIp;
@@ -176,6 +178,7 @@ namespace ProcessDemo
             gridThreads.BorderStyle = BorderStyle.None;
             gridThreads.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
             gridThreads.GridColor = Color.Gainsboro;
+            gridThreads.ContextMenuStrip = _menuThread;
 
             gridThreads.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         }
@@ -200,6 +203,8 @@ namespace ProcessDemo
             _menu.Items.Add("Suspend", null, (s, e) => SuspendSelected());
             _menu.Items.Add("Resume", null, (s, e) => ResumeSelected());
             grid.ContextMenuStrip = _menu;
+            _menuThread = new ContextMenuStrip();
+            _menuThread.Items.Add("Show Priorities", null, (s, e) => ShowPrioritiesForSelectedThread());
         }
 
         private async void BtnConnect_Click(object sender, EventArgs e)
@@ -296,6 +301,17 @@ namespace ProcessDemo
                         var itemToUpdateVolatile = _allProcessItems.FirstOrDefault(p => p.Pid == volatileUpdate.Pid);
                         itemToUpdateVolatile?.ApplyVolatileUpdate(volatileUpdate);
                         break;
+                    case "thread_priorities_info":
+                        var info = JsonConvert.DeserializeObject<NativeProcesses.Core.Models.ExtendedThreadInfo>(data);
+                        string message = $"Thread: {info.ThreadId}\n\n";
+                        message += $"I/O Priority: {info.IoPriority}\n";
+                        message += $"Memory Priority: {info.MemoryPriority}";
+                        MessageBox.Show(this, message, "Thread Priorities", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        break;
+
+                    case "thread_priorities_error":
+                        MessageBox.Show(this, data, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        break;
                 }
             }
             catch (Exception ex)
@@ -321,6 +337,22 @@ namespace ProcessDemo
                     return null;
                 return grid.SelectedRows[0].DataBoundItem as ProcessInfoViewModel;
             }
+        }
+
+        private ThreadInfoViewModel SelectedThread
+        {
+            get
+            {
+                if (gridThreads.SelectedRows.Count == 0)
+                    return null;
+                return gridThreads.SelectedRows[0].DataBoundItem as ThreadInfoViewModel;
+            }
+        }
+        private void ShowPrioritiesForSelectedThread()
+        {
+            var t = SelectedThread;
+            if (t == null || _client == null || !_client.IsConnected) return;
+            _client.SendMessageAsync("get_thread_priorities", t.ThreadId);
         }
 
         private void KillSelected()

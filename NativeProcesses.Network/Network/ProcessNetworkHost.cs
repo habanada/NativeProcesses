@@ -125,13 +125,28 @@ namespace NativeProcesses.Network
                             ShutdownServer();
                         });
                         break;
+                    case "get_thread_priorities":
+                        int tid = JsonConvert.DeserializeObject<int>(data);
+                        HandleGetThreadPrioritiesAsync(ssl, tid);
+                        break;
                 }
             }
             catch
             {
             }
         }
-
+        private async void HandleGetThreadPrioritiesAsync(SslStream ssl, int threadId)
+        {
+            try
+            {
+                var info = await ProcessManager.GetExtendedThreadInfoAsync(threadId, null);
+                await _server.SendMessageAsync(ssl, "thread_priorities_info", info);
+            }
+            catch (Exception)
+            {
+                await _server.SendMessageAsync(ssl, "thread_priorities_error", $"Failed to get priorities for TID {threadId}.");
+            }
+        }
         public void ShutdownServer()
         {
             if (_service != null)

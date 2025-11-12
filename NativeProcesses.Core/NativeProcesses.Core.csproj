@@ -133,6 +133,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Models\ExtendedThreadInfo.cs" />
     <Compile Include="Models\NativeHandleInfo.cs" />
     <Compile Include="Models\ProcessModuleInfo.cs" />
     <Compile Include="Native\ManagedProcess.cs" />

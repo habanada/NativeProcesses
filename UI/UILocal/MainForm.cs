@@ -50,6 +50,36 @@ namespace ProcessDemo
                 e.SuppressKeyPress = true;
                 ShowHandlesForSelectedProcess();
             }
+            else if (e.KeyCode == Keys.F7)
+            {
+                e.SuppressKeyPress = true;
+                ShowPrioritiesForSelectedThread();
+            }
+        }
+        private async void ShowPrioritiesForSelectedThread()
+        {
+            var t = SelectedThread;
+            if (t == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var info = await ProcessManager.GetExtendedThreadInfoAsync(t.ThreadId, _logger);
+
+                string message = $"Thread: {info.ThreadId}\n\n";
+                message += $"I/O Priority: {info.IoPriority}\n";
+                message += $"Memory Priority: {info.MemoryPriority}";
+
+                MessageBox.Show(this, message, "Thread Priorities", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not load priorities for TID {t.ThreadId}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
         }
         private async void ShowModulesForSelectedProcess()
         {
@@ -208,6 +238,8 @@ namespace ProcessDemo
             _menuThread = new ContextMenuStrip();
             _menuThread.Items.Add("Suspend Thread", null, (s, e) => SuspendSelectedThread());
             _menuThread.Items.Add("Resume Thread", null, (s, e) => ResumeSelectedThread());
+            _menuThread.Items.Add("-");
+            _menuThread.Items.Add("Show Priorities (F7)", null, (s, e) => ShowPrioritiesForSelectedThread());
             gridThreads.ContextMenuStrip = _menuThread;
         }
 

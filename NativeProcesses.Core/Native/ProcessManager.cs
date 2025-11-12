@@ -23,6 +23,23 @@ namespace NativeProcesses.Core.Native
             High = 0x00000080,
             RealTime = 0x00000100
         }
+        public static Task<Models.ExtendedThreadInfo> GetExtendedThreadInfoAsync(int threadId, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                var access = ManagedThread.ThreadAccessFlags.QueryInformation;
+                using (var thread = new ManagedThread(threadId, access))
+                {
+                    thread.GetExtendedPriorities(out var ioPriority, out var memPriority);
+                    return new Models.ExtendedThreadInfo
+                    {
+                        ThreadId = threadId,
+                        IoPriority = ioPriority,
+                        MemoryPriority = memPriority
+                    };
+                }
+            });
+        }
         public static Task<List<ProcessModuleInfo>> GetModulesAsync(int pid, IEngineLogger logger = null)
         {
             return Task.Run(() =>
