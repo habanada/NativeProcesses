@@ -273,7 +273,19 @@ namespace ProcessDemo
             get { return _ioOther; }
             set { _ioOther = value; Notify(); }
         }
+        private string _dpiAwareness;
+        public string DpiAwareness
+        {
+            get { return _dpiAwareness; }
+            set { _dpiAwareness = value; Notify(); }
+        }
 
+        private bool _isImmersive;
+        public bool IsImmersive
+        {
+            get { return _isImmersive; }
+            set { _isImmersive = value; Notify(); }
+        }
         public ProcessInfoViewModel(FullProcessInfo source)
         {
             this.Pid = source.Pid;
@@ -302,6 +314,9 @@ namespace ProcessDemo
             this.IsDebuggerAttached = source.IsDebuggerAttached;
             this.IsInJob = source.IsInJob;
             this.IsEcoMode = source.IsEcoMode;
+            
+            this.DpiAwareness = source.DpiAwareness;
+            this.IsImmersive = source.IsImmersive;
 
             this.UserName = source.SecurityInfo.UserName;
             this.IntegrityLevel = source.SecurityInfo.IntegrityLevel;

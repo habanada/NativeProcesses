@@ -151,7 +151,32 @@ namespace NativeProcesses.Core.Native
             out SID_NAME_USE peUse);
         #endregion
 
+        #region P/Invoke User32 & Shcore
+        [DllImport("shcore.dll", SetLastError = true)]
+        private static extern int GetProcessDpiAwareness(IntPtr hprocess, out PROCESS_DPI_AWARENESS value);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetProcessUIContextInformation(IntPtr hProcess, ref UICONTEXT_INFORMATION pContextInfo);
+
+        private const uint UICONTEXT_IMMERSIVE = 0x1;
+        #endregion
+
         #region Structs & Enums
+        private enum PROCESS_DPI_AWARENESS
+        {
+            PROCESS_DPI_UNAWARE = 0,
+            PROCESS_SYSTEM_DPI_AWARE = 1,
+            PROCESS_PER_MONITOR_DPI_AWARE = 2
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct UICONTEXT_INFORMATION
+        {
+            public uint dwFlags;
+            public uint dwContext;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct PROCESS_POWER_THROTTLING_STATE
         {
@@ -531,7 +556,43 @@ namespace NativeProcesses.Core.Native
         #endregion
 
         #region Process Info (Slow / New)
+        public void GetDpiAndUIContextInfo(out string dpiAwareness, out bool isImmersive)
+        {
+            dpiAwareness = "Unknown";
+            isImmersive = false;
 
+            try
+            {
+                int result = GetProcessDpiAwareness(this.Handle, out PROCESS_DPI_AWARENESS dpiValue);
+                if (result == 0)
+                {
+                    dpiAwareness = dpiValue.ToString();
+                }
+                else
+                {
+                    dpiAwareness = new Win32Exception(result).Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                dpiAwareness = ex.Message;
+            }
+
+            try
+            {
+                var contextInfo = new UICONTEXT_INFORMATION();
+                if (GetProcessUIContextInformation(this.Handle, ref contextInfo))
+                {
+                    if ((contextInfo.dwFlags & UICONTEXT_IMMERSIVE) == UICONTEXT_IMMERSIVE)
+                    {
+                        isImmersive = true;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+        }
         public void GetExtendedStatusFlags(out bool isDebuggerAttached, out bool isInJob, out bool isEcoMode)
         {
             isDebuggerAttached = false;

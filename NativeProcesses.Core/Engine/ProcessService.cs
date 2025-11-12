@@ -268,7 +268,21 @@ namespace NativeProcesses.Core.Engine
                             _logger?.Log(LogLevel.Debug, $"Failed to get ExtendedStatusFlags for PID {info.Pid}.", ex);
                         }
                     }
-
+                    if (this.DetailOptions.LoadDpiAndUIContext)
+                    {
+                        try
+                        {
+                            proc.GetDpiAndUIContextInfo(out string dpi, out bool immersive);
+                            info.DpiAwareness = dpi;
+                            info.IsImmersive = immersive;
+                        }
+                        catch (Win32Exception)
+                        { } //denoise
+                        catch (Exception ex)
+                        {
+                            _logger?.Log(LogLevel.Debug, $"Failed to get DpiAndUIContext for PID {info.Pid}.", ex);
+                        }
+                    }
                 }
             }
             catch (Win32Exception ex)

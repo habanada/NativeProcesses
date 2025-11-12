@@ -217,9 +217,25 @@ namespace NativeProcesses.Core
             set { lock (_updateLock) { _isEcoMode = value; } }
         }
 
+        private string _dpiAwareness;
+        public string DpiAwareness
+        {
+            get { lock (_updateLock) { return _dpiAwareness; } }
+            set { lock (_updateLock) { _dpiAwareness = value; } }
+        }
+
+        private bool _isImmersive;
+        public bool IsImmersive
+        {
+            get { lock (_updateLock) { return _isImmersive; } }
+            set { lock (_updateLock) { _isImmersive = value; } }
+        }
 
         public volatile bool IsLoadingDetails;
         public volatile bool IsDetailsLoaded;
+
+
+
         public FullProcessInfo()
         {
             this._threadsList = new List<ThreadInfo>();
@@ -246,6 +262,8 @@ namespace NativeProcesses.Core
             this._isDebuggerAttached = false;
             this._isInJob = false;
             this._isEcoMode = false;
+            this._dpiAwareness = "[Loading...]";
+            this._isImmersive = false;
         }
 
         public void UpdateFastData(string name, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority, List<ThreadInfo> threadInfos)
