@@ -16,5 +16,6 @@ namespace NativeProcesses.Core
         public bool LoadHandles { get; set; } = false;
         public bool LoadExtendedStatusFlags { get; set; } = true;
         public bool LoadDpiAndUIContext { get; set; } = true;
+        public bool LoadPackageInfo { get; set; } = true;
     }    
 }

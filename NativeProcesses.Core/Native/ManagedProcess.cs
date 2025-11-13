@@ -108,6 +108,16 @@ namespace NativeProcesses.Core.Native
             UIntPtr MemoryInformationLength,
             out UIntPtr ReturnLength);
         #endregion
+        #region P/Invoke Kernel32 (AppModel)
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern int GetPackageFullNameFromProcess(
+            IntPtr hProcess,
+            ref int packageFullNameLength,
+            StringBuilder packageFullName);
+
+        private const int ERROR_INSUFFICIENT_BUFFER = 122;
+        public const int APPMODEL_ERROR_NO_PACKAGE = 15700;
+        #endregion
 
         #region P/Invoke Ntdll
         [DllImport("ntdll.dll", SetLastError = true)]
@@ -160,6 +170,7 @@ namespace NativeProcesses.Core.Native
         private static extern bool GetProcessUIContextInformation(IntPtr hProcess, ref UICONTEXT_INFORMATION pContextInfo);
 
         private const uint UICONTEXT_IMMERSIVE = 0x1;
+
         #endregion
 
         #region Structs & Enums
@@ -242,6 +253,7 @@ namespace NativeProcesses.Core.Native
             TokenUIAccess,
             TokenMandatoryPolicy,
             TokenLogonSid,
+            TokenIsAppContainer,
             MaxTokenInfoClass
         }
 
@@ -556,6 +568,33 @@ namespace NativeProcesses.Core.Native
         #endregion
 
         #region Process Info (Slow / New)
+        public string GetPackageFullName()
+        {
+            int length = 0;
+            StringBuilder sb = new StringBuilder(0);
+
+            int result = GetPackageFullNameFromProcess(this.Handle, ref length, sb);
+
+            if (result == APPMODEL_ERROR_NO_PACKAGE)
+            {
+                return null;
+            }
+
+            if (result != ERROR_INSUFFICIENT_BUFFER)
+            {
+                throw new Win32Exception(result);
+            }
+
+            sb = new StringBuilder(length);
+            result = GetPackageFullNameFromProcess(this.Handle, ref length, sb);
+
+            if (result != 0)
+            {
+                throw new Win32Exception(result);
+            }
+
+            return sb.ToString();
+        }
         public void GetDpiAndUIContextInfo(out string dpiAwareness, out bool isImmersive)
         {
             dpiAwareness = "Unknown";
@@ -747,6 +786,7 @@ namespace NativeProcesses.Core.Native
                     info.UserName = GetTokenUser(tokenHandle);
                     info.IntegrityLevel = GetTokenIntegrityLevel(tokenHandle);
                     info.IsElevated = GetTokenIsElevated(tokenHandle);
+                    info.IsAppContainer = GetTokenIsAppContainer(tokenHandle);
                 }
                 finally
                 {
@@ -860,7 +900,29 @@ namespace NativeProcesses.Core.Native
                 Marshal.FreeHGlobal(buffer);
             }
         }
+        private bool GetTokenIsAppContainer(IntPtr tokenHandle)
+        {
+            if (!GetTokenInformation(tokenHandle, TOKEN_INFORMATION_CLASS.TokenIsAppContainer, IntPtr.Zero, 0, out uint length))
+            {
+                if (Marshal.GetLastWin32Error() != 122)
+                    throw new Win32Exception(Marshal.GetLastWin32Error(),
+                        "GetTokenInformation(TokenIsAppContainer) length failed.");
+            }
 
+            IntPtr buffer = Marshal.AllocHGlobal((int)length);
+            try
+            {
+                if (!GetTokenInformation(tokenHandle, TOKEN_INFORMATION_CLASS.TokenIsAppContainer, buffer, length, out _))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "GetTokenInformation(TokenIsAppContainer) failed.");
+                }
+                return Marshal.ReadInt32(buffer) == 1;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
         public ProcessMitigationInfo GetMitigationInfo()
         {
             var info = new ProcessMitigationInfo();

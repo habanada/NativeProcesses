@@ -288,7 +288,20 @@ namespace ProcessDemo
             get { return _isImmersive; }
             set { _isImmersive = value; Notify(); }
         }
+        private string _packageFullName;
+        public string PackageFullName
+        {
+            get { return _packageFullName; }
+            set { _packageFullName = value; Notify(); }
+        }
 
+        public bool IsPackagedApp { get; private set; }
+        private bool _isAppContainer;
+        public bool IsAppContainer
+        {
+            get { return _isAppContainer; }
+            set { _isAppContainer = value; Notify(); }
+        }
         public ProcessInfoViewModel(FullProcessInfo source)
         {
             this.Pid = source.Pid;
@@ -324,6 +337,10 @@ namespace ProcessDemo
 
             this.DpiAwareness = source.DpiAwareness;
             this.IsImmersive = source.IsImmersive;
+
+            this.PackageFullName = source.PackageFullName;
+            this.IsPackagedApp = source.IsPackagedApp;
+            this.IsAppContainer = source.SecurityInfo.IsAppContainer;
 
             this.UserName = source.SecurityInfo.UserName;
             this.IntegrityLevel = source.SecurityInfo.IntegrityLevel;

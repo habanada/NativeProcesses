@@ -283,6 +283,33 @@ namespace NativeProcesses.Core.Engine
                             _logger?.Log(LogLevel.Debug, $"Failed to get DpiAndUIContext for PID {info.Pid}.", ex);
                         }
                     }
+                    if (this.DetailOptions.LoadPackageInfo)
+                    {
+                        try
+                        {
+                            info.PackageFullName = proc.GetPackageFullName();
+                        }
+                        catch (Win32Exception ex)
+                        {
+                            if (ex.NativeErrorCode == ManagedProcess.APPMODEL_ERROR_NO_PACKAGE)
+                            {
+                                info.PackageFullName = "N/A";
+                            }
+                            else
+                            {
+                                info.PackageFullName = "Error";
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            info.PackageFullName = "Error";
+                            _logger?.Log(LogLevel.Debug, $"Failed to get PackageFullName for PID {info.Pid}.", ex);
+                        }
+                        if (info.PackageFullName == null)
+                        {
+                            info.PackageFullName = "N/A";
+                        }
+                    }
                 }
             }
             catch (Win32Exception ex)

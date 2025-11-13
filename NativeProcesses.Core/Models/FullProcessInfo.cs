@@ -234,7 +234,29 @@ namespace NativeProcesses.Core
         public volatile bool IsLoadingDetails;
         public volatile bool IsDetailsLoaded;
 
+        private string _packageFullName;
+        public string PackageFullName
+        {
+            get { lock (_updateLock) { return _packageFullName; } }
+            set { lock (_updateLock) { _packageFullName = value; } }
+        }
 
+        public bool IsPackagedApp
+        {
+            get
+            {
+                lock (_updateLock)
+                {
+                    bool hasPackageName = !string.IsNullOrEmpty(_packageFullName) &&
+                                          !_packageFullName.StartsWith("[") &&
+                                          _packageFullName != "N/A";
+
+                    bool isAppContainer = this.SecurityInfo.IsAppContainer;
+
+                    return hasPackageName || isAppContainer;
+                }
+            }
+        }
 
         public FullProcessInfo()
         {
@@ -264,6 +286,7 @@ namespace NativeProcesses.Core
             this._isEcoMode = false;
             this._dpiAwareness = "[Loading...]";
             this._isImmersive = false;
+            this._packageFullName = "[Loading...]";
         }
 
         public void UpdateFastData(string name, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority, List<ThreadInfo> threadInfos)
