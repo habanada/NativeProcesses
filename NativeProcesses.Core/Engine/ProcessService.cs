@@ -310,6 +310,41 @@ namespace NativeProcesses.Core.Engine
                             info.PackageFullName = "N/A";
                         }
                     }
+                    if (this.DetailOptions.DetectDotNet)
+                    {
+                        try
+                        {
+                            var modules = proc.GetLoadedModules(_logger);
+                            bool framework = false;
+                            bool core = false;
+
+                            foreach (var mod in modules)
+                            {
+                                if (mod.BaseDllName.Equals("clr.dll", StringComparison.OrdinalIgnoreCase))
+                                    framework = true;
+                                else if (mod.BaseDllName.Equals("coreclr.dll", StringComparison.OrdinalIgnoreCase))
+                                    core = true;
+                            }
+
+                            if (framework && core)
+                                info.DotNetVersion = "Hybrid";
+                            else if (framework)
+                                info.DotNetVersion = "Framework";
+                            else if (core)
+                                info.DotNetVersion = "Core";
+                            else
+                                info.DotNetVersion = "N/A";
+                        }
+                        catch (Win32Exception)
+                        {
+                            info.DotNetVersion = "N/A";
+                        }
+                        catch (Exception ex)
+                        {
+                            info.DotNetVersion = "Error";
+                            _logger?.Log(LogLevel.Debug, $"Failed to detect .NET version for PID {info.Pid}.", ex);
+                        }
+                    }
                 }
             }
             catch (Win32Exception ex)

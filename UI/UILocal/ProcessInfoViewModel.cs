@@ -301,7 +301,12 @@ namespace ProcessDemo
             get { return _isAppContainer; }
             set { _isAppContainer = value; Notify(); }
         }
-
+        private string _dotNetVersion;
+        public string DotNetVersion
+        {
+            get { return _dotNetVersion; }
+            set { _dotNetVersion = value; Notify(); }
+        }
         public ProcessInfoViewModel(FullProcessInfo source)
         {
             this.Pid = source.Pid;
@@ -337,6 +342,7 @@ namespace ProcessDemo
             this.PackageFullName = source.PackageFullName;
             this.IsPackagedApp = source.IsPackagedApp;
             this.IsAppContainer = source.SecurityInfo.IsAppContainer;
+            this.DotNetVersion = source.DotNetVersion;
 
             this.UserName = source.SecurityInfo.UserName;
             this.IntegrityLevel = source.SecurityInfo.IntegrityLevel;
@@ -393,5 +399,14 @@ namespace ProcessDemo
                 }
             }
         }
+        public System.Collections.Generic.List<NativeProcesses.Core.Models.ProcessModuleInfo> Modules { get; private set; }
+        public bool AreModulesLoadingOrLoaded { get; private set; }
+
+        public void SetModules(System.Collections.Generic.List<NativeProcesses.Core.Models.ProcessModuleInfo> modules)
+        {
+            this.Modules = modules;
+            this.AreModulesLoadingOrLoaded = true;
+        }
     }
+
 }

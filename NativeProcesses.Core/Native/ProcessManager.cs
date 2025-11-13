@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using NativeProcesses.Core.Inspection;
 
 namespace NativeProcesses.Core.Native
 {
@@ -22,6 +23,103 @@ namespace NativeProcesses.Core.Native
             AboveNormal = 0x00008000,
             High = 0x00000080,
             RealTime = 0x00000100
+        }
+
+
+
+
+
+
+        public static Task<List<Models.NetworkConnectionInfo>> GetNetworkConnectionsAsync(IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return NetworkManager.GetNetworkConnections();
+            });
+        }
+        public static Task<List<Models.WindowInfo>> GetWindowsAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return WindowManager.GetWindowsForProcess(pid);
+            });
+        }
+        public static Task<List<Models.DotNetAppDomainInfo>> GetDotNetAppDomainsAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetAppDomainInfo(pid);
+            });
+        }
+        public static Task<List<Models.DotNetStringDuplicateInfo>> GetDotNetAllHeapStringsAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetAllHeapStrings(pid);
+            });
+        }
+        public static Task<List<Models.DotNetStringDuplicateInfo>> GetDotNetStringDuplicatesAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetStringDuplicateStats(pid);
+            });
+        }
+        public static Task<List<Models.DotNetGcRootPathInfo>> GetDotNetGcRootPathAsync(int pid, ulong targetObject, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetGcRootPath(pid, targetObject);
+            });
+        }
+        public static Task<Models.DotNetThreadPoolInfo> GetDotNetThreadPoolAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetThreadPoolInfo(pid);
+            });
+        }
+        public static Task<List<Models.DotNetFinalizerInfo>> GetDotNetFinalizerQueueAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetFinalizerInfo(pid);
+            });
+        }
+        public static Task<List<Models.DotNetLockInfo>> GetDotNetLockingInfoAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetLockingInfo(pid);
+            });
+        }
+        public static Task<List<Models.DotNetStackFrame>> GetDotNetThreadStackAsync(int pid, int osThreadId, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetManagedStack(pid, osThreadId);
+            });
+        }
+        public static Task<List<Models.DotNetRootInfo>> GetDotNetGcRootsAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetGcRoots(pid);
+            });
+        }
+        public static Task<List<Models.DotNetExceptionInfo>> GetDotNetHeapExceptionsAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetHeapExceptions(pid);
+            });
+        }
+        public static Task<List<Models.DotNetHeapStat>> GetDotNetHeapStatsAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                return DotNetInspector.GetHeapStats(pid);
+            });
         }
         public static Task<Models.ExtendedThreadInfo> GetExtendedThreadInfoAsync(int threadId, IEngineLogger logger = null)
         {

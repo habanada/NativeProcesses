@@ -10,6 +10,8 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using NativeProcesses.Core.Models;
+using System.Threading.Tasks;
 
 namespace ProcessDemo
 {
@@ -22,6 +24,7 @@ namespace ProcessDemo
         private bool isInitialLoad = true;
         private List<ProcessInfoViewModel> initialLoadBatch = new List<ProcessInfoViewModel>();
         private IEngineLogger _logger;
+        private Button btnNetwork;
 
         public MainForm()
         {
@@ -40,6 +43,16 @@ namespace ProcessDemo
         }
         private void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
+            if (e.KeyCode == Keys.F3)
+            {
+                e.SuppressKeyPress = true;
+                ShowUwpPackageInfo_Click();
+            }
+            if (e.KeyCode == Keys.F4)
+            {
+                e.SuppressKeyPress = true;
+                ShowWindowsForSelectedProcess();
+            }
             if (e.KeyCode == Keys.F5)
             {
                 e.SuppressKeyPress = true;
@@ -64,6 +77,278 @@ namespace ProcessDemo
             {
                 e.SuppressKeyPress = true;
                 ShowMemoryRegionsForSelectedProcess();
+            }
+            else if (e.KeyCode == Keys.F10)
+            {
+                e.SuppressKeyPress = true;
+                ShowDotNetHeapForSelectedProcess();
+            }
+            else if (e.KeyCode == Keys.F11)
+            {
+                e.SuppressKeyPress = true;
+                ShowDotNetExceptionsForSelectedProcess();
+            }
+            else if (e.KeyCode == Keys.F12)
+            {
+                e.SuppressKeyPress = true;
+                ShowDotNetGcRootsForSelectedProcess();
+            }
+        }
+        private async void ShowDotNetHeapForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var heapStats = await ProcessManager.GetDotNetHeapStatsAsync(p.Pid, _logger);
+                long totalObjects = heapStats.Sum(s => s.Count);
+
+                using (var detailForm = new DetailForm($".NET Heap Stats: {p.Name} ({p.Pid}) ({totalObjects} Objects)", heapStats, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET heap for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowDotNetExceptionsForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var exceptions = await ProcessManager.GetDotNetHeapExceptionsAsync(p.Pid, _logger);
+
+                using (var detailForm = new DetailForm($".NET Exceptions on Heap: {p.Name} ({p.Pid}) ({exceptions.Count()} found)", exceptions, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET heap for exceptions (PID {p.Pid}):\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+            private async void ShowWindowsForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var windows = await ProcessManager.GetWindowsAsync(p.Pid, _logger);
+                using (var detailForm = new DetailForm($"Windows for {p.Name} ({p.Pid})", windows, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not load windows for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowDotNetGcRootsForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var roots = await ProcessManager.GetDotNetGcRootsAsync(p.Pid, _logger);
+
+                using (var detailForm = new DetailForm($".NET GC Roots: {p.Name} ({p.Pid}) ({roots.Count()} roots found)", roots, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET GC roots for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowDotNetFinalizerQueueForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var finalizerQueue = await ProcessManager.GetDotNetFinalizerQueueAsync(p.Pid, _logger);
+                using (var detailForm = new DetailForm($".NET Finalizer Queue: {p.Name} ({p.Pid}) ({finalizerQueue.Count()} objects)", finalizerQueue, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET Finalizer Queue for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowDotNetAppDomains_Click()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var domains = await ProcessManager.GetDotNetAppDomainsAsync(p.Pid, _logger);
+
+                var displayData = domains.Select(d => new
+                {
+                    d.Id,
+                    d.Name,
+                    d.Address,
+                    d.ConfigFile,
+                    d.ApplicationBase,
+                    LoadedAssemblies = string.Join(", ", d.LoadedAssemblies.ToArray())
+                }).ToList();
+
+                using (var detailForm = new DetailForm($".NET AppDomains: {p.Name} ({p.Pid})", displayData, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET AppDomains for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowDotNetAllHeapStrings_Click()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var stats = await ProcessManager.GetDotNetAllHeapStringsAsync(p.Pid, _logger);
+                using (var detailForm = new DetailForm($".NET Heap Strings: {p.Name} ({p.Pid})", stats, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET heap strings for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowDotNetStringDuplicates_Click()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var stats = await ProcessManager.GetDotNetStringDuplicatesAsync(p.Pid, _logger);
+                using (var detailForm = new DetailForm($".NET String Duplicates: {p.Name} ({p.Pid})", stats, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET string duplicates for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowDotNetThreadPoolForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var tpInfo = await ProcessManager.GetDotNetThreadPoolAsync(p.Pid, _logger);
+
+                var list = new List<DotNetThreadPoolInfo> { tpInfo };
+
+                using (var detailForm = new DetailForm($".NET ThreadPool: {p.Name} ({p.Pid})", list, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET ThreadPool for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private void ShowUwpPackageInfo_Click()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            if (!p.IsPackagedApp)
+            {
+                MessageBox.Show(this, "This is not a packaged (UWP/MSIX) application.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var uwpInfo = UwpManager.GetPackageInfo(p.PackageFullName);
+
+                var list = new System.Collections.Generic.List<UwpPackageInfo> { uwpInfo };
+
+                using (var detailForm = new DetailForm($"UWP Package Info: {p.Name}", list, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not load UWP package info for {p.PackageFullName}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
             }
         }
         private async void ShowPrioritiesForSelectedThread()
@@ -100,7 +385,7 @@ namespace ProcessDemo
             try
             {
                 var modules = await ProcessManager.GetModulesAsync(p.Pid, _logger);
-                using (var detailForm = new DetailForm($"Modules for {p.Name} ({p.Pid})", modules))
+                using (var detailForm = new DetailForm($"Modules for {p.Name} ({p.Pid})", modules, p.Pid))
                 {
                     detailForm.ShowDialog(this);
                 }
@@ -124,7 +409,7 @@ namespace ProcessDemo
             try
             {
                 var handles = await ProcessManager.GetHandlesAsync(p.Pid, _logger);
-                using (var detailForm = new DetailForm($"Handles for {p.Name} ({p.Pid})", handles))
+                using (var detailForm = new DetailForm($"Handles for {p.Name} ({p.Pid})", handles, p.Pid))
                 {
                     detailForm.ShowDialog(this);
                 }
@@ -149,8 +434,37 @@ namespace ProcessDemo
             edtFilter.BackColor = Color.FromArgb(45, 45, 48);
             edtFilter.TextChanged += edtFilter_TextChanged;
             edtFilter.BorderStyle = BorderStyle.FixedSingle;
-        }
 
+            btnNetwork = new Button();
+            btnNetwork.Text = "Network";
+            btnNetwork.Dock = DockStyle.Right;
+            btnNetwork.Width = 80;
+            btnNetwork.ForeColor = Color.White;
+            btnNetwork.BackColor = Color.FromArgb(60, 60, 60);
+            btnNetwork.FlatStyle = FlatStyle.Flat;
+            btnNetwork.Click += ShowNetworkConnections_Click;
+            panel1.Controls.Add(btnNetwork);
+        }
+        private async void ShowNetworkConnections_Click(object sender, EventArgs e)
+        {
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var connections = await ProcessManager.GetNetworkConnectionsAsync(_logger);
+                using (var detailForm = new DetailForm("System Network Connections", connections, -1))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not load network connections:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
         private void edtFilter_TextChanged(object sender, EventArgs e)
         {
             ApplyFilter();
@@ -224,12 +538,20 @@ namespace ProcessDemo
         }
 
 
-        private void Grid_SelectionChanged(object sender, EventArgs e)
+        private async void Grid_SelectionChanged(object sender, EventArgs e)
         {
             var p = SelectedProcess;
             if (p != null)
             {
                 gridThreads.DataSource = p.Threads;
+                if (!p.AreModulesLoadingOrLoaded)
+                {
+                    await LoadModulesForProcess(p);
+                }
+                else
+                {
+                    ResolveThreadAddresses(p);
+                }
             }
             else
             {
@@ -249,12 +571,26 @@ namespace ProcessDemo
             _menuThread.Items.Add("Suspend Thread", null, (s, e) => SuspendSelectedThread());
             _menuThread.Items.Add("Resume Thread", null, (s, e) => ResumeSelectedThread());
             _menuThread.Items.Add("-");
+            _menu.Items.Add("Show Windows (F4)", null, (s, e) => ShowWindowsForSelectedProcess());
             _menu.Items.Add("Show Modules (F5)", null, (s, e) => ShowModulesForSelectedProcess());
             _menu.Items.Add("Show Handles (F6)", null, (s, e) => ShowHandlesForSelectedProcess());
 
             _menu.Items.Add("Show Memory Regions (F9)", null, (s, e) => ShowMemoryRegionsForSelectedProcess());
+            _menu.Items.Add("-");
+            _menu.Items.Add("Show .NET Heap Stats (F10)", null, (s, e) => ShowDotNetHeapForSelectedProcess());
+            _menu.Items.Add("Show .NET Exceptions (F11)", null, (s, e) => ShowDotNetExceptionsForSelectedProcess());
+            _menu.Items.Add("Show .NET GC Roots (F12)", null, (s, e) => ShowDotNetGcRootsForSelectedProcess());
+            _menu.Items.Add("Show .NET Locks & Blocks", null, (s, e) => ShowDotNetLockingInfoForSelectedProcess());
+            _menu.Items.Add("Show .NET Finalizer Queue", null, (s, e) => ShowDotNetFinalizerQueueForSelectedProcess());
+            _menu.Items.Add("Show .NET ThreadPool", null, (s, e) => ShowDotNetThreadPoolForSelectedProcess());
+            _menu.Items.Add("Show .NET String Duplicates", null, (s, e) => ShowDotNetStringDuplicates_Click());
+            _menu.Items.Add("Show All Heap Strings", null, (s, e) => ShowDotNetAllHeapStrings_Click());
+            _menu.Items.Add("Show .NET AppDomains/Assemblies", null, (s, e) => ShowDotNetAppDomains_Click());
+            _menu.Items.Add("Show UWP Package Info (F3)", null, (s, e) => ShowUwpPackageInfo_Click());
+
             _menuThread.Items.Add("Show Priorities (F7)", null, (s, e) => ShowPrioritiesForSelectedThread());
             _menuThread.Items.Add("Resolve Start Address (F8)", null, (s, e) => ResolveSelectedThreadAddress());
+            _menuThread.Items.Add("Show Managed Stack", null, (s, e) => ShowManagedStackForSelectedThread());
             gridThreads.ContextMenuStrip = _menuThread;
         }
 
@@ -279,7 +615,57 @@ namespace ProcessDemo
                 isInitialLoad = false;
             }
         }
+        private async Task LoadModulesForProcess(ProcessInfoViewModel p)
+        {
+            p.SetModules(new List<NativeProcesses.Core.Models.ProcessModuleInfo>());
 
+            try
+            {
+                var modules = await ProcessManager.GetModulesAsync(p.Pid, _logger);
+                p.SetModules(modules);
+                ResolveThreadAddresses(p);
+            }
+            catch (Exception ex)
+            {
+            }
+        }
+
+        private void ResolveThreadAddresses(ProcessInfoViewModel p)
+        {
+            if (p.Modules == null || p.Modules.Count == 0)
+                return;
+
+            foreach (var t in p.Threads)
+            {
+                if (t.StartAddress == IntPtr.Zero)
+                {
+                    t.StartAddressSymbol = "N/A";
+                    continue;
+                }
+
+                string resolvedName = "0x" + t.StartAddress.ToString("X");
+                bool found = false;
+
+                foreach (var mod in p.Modules)
+                {
+                    if (mod.SizeOfImage == 0)
+                        continue;
+
+                    IntPtr start = mod.DllBase;
+                    IntPtr end = IntPtr.Add(start, (int)mod.SizeOfImage);
+
+                    if (t.StartAddress.ToInt64() >= start.ToInt64() && t.StartAddress.ToInt64() < end.ToInt64())
+                    {
+                        long offset = t.StartAddress.ToInt64() - start.ToInt64();
+                        resolvedName = $"{mod.BaseDllName}+0x{offset:X}";
+                        found = true;
+                        break;
+                    }
+                }
+
+                t.StartAddressSymbol = resolvedName;
+            }
+        }
         //private void LoadProcesses()
         //{
         //    var provider = new PollingProcessProvider(TimeSpan.FromSeconds(3));
@@ -326,7 +712,7 @@ namespace ProcessDemo
             try
             {
                 var regions = await ProcessManager.GetVirtualMemoryRegionsAsync(p.Pid, _logger);
-                using (var detailForm = new DetailForm($"Memory Regions for {p.Name} ({p.Pid})", regions))
+                using (var detailForm = new DetailForm($"Memory Regions for {p.Name} ({p.Pid})", regions, p.Pid))
                 {
                     detailForm.ShowDialog(this);
                 }
@@ -334,6 +720,55 @@ namespace ProcessDemo
             catch (Exception ex)
             {
                 MessageBox.Show(this, $"Could not load memory regions for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowDotNetLockingInfoForSelectedProcess()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var locks = await ProcessManager.GetDotNetLockingInfoAsync(p.Pid, _logger);
+
+                using (var detailForm = new DetailForm($".NET Locks: {p.Name} ({p.Pid}) ({locks.Count} contended locks)", locks, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not analyze .NET locks for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+        private async void ShowManagedStackForSelectedThread()
+        {
+            var p = SelectedProcess;
+            var t = SelectedThread;
+            if (p == null || t == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var stack = await ProcessManager.GetDotNetThreadStackAsync(p.Pid, t.ThreadId, _logger);
+
+                using (var detailForm = new DetailForm($".NET Stack: {p.Name} (TID {t.ThreadId})", stack, p.Pid))
+                {
+                    detailForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not get managed stack for TID {t.ThreadId}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {

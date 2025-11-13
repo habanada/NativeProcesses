@@ -24,6 +24,12 @@ namespace ProcessDemo
             get { return _startAddress; }
             set { _startAddress = value; Notify(); }
         }
+        private string _startAddressSymbol;
+        public string StartAddressSymbol
+        {
+            get { return _startAddressSymbol; }
+            set { _startAddressSymbol = value; Notify(); }
+        }
         private int _priority;
         public int BasePriority
         {
@@ -57,7 +63,12 @@ namespace ProcessDemo
             this.BasePriority = source.BasePriority;
             this.KernelTime = source.KernelTime;
             this.UserTime = source.UserTime;
-            this.StartAddress = source.StartAddress;
+
+            if (this.StartAddress != source.StartAddress)
+            {
+                this.StartAddress = source.StartAddress;
+                this.StartAddressSymbol = "0x" + this.StartAddress.ToString("X");
+            }
         }
     }
 }

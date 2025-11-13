@@ -257,7 +257,12 @@ namespace NativeProcesses.Core
                 }
             }
         }
-
+        private string _dotNetVersion;
+        public string DotNetVersion
+        {
+            get { lock (_updateLock) { return _dotNetVersion; } }
+            set { lock (_updateLock) { _dotNetVersion = value; } }
+        }
         public FullProcessInfo()
         {
             this._threadsList = new List<ThreadInfo>();
@@ -287,6 +292,7 @@ namespace NativeProcesses.Core
             this._dpiAwareness = "[Loading...]";
             this._isImmersive = false;
             this._packageFullName = "[Loading...]";
+            this._dotNetVersion = "[...]";
         }
 
         public void UpdateFastData(string name, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority, List<ThreadInfo> threadInfos)

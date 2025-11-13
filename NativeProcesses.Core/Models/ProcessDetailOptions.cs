@@ -17,5 +17,6 @@ namespace NativeProcesses.Core
         public bool LoadExtendedStatusFlags { get; set; } = true;
         public bool LoadDpiAndUIContext { get; set; } = true;
         public bool LoadPackageInfo { get; set; } = true;
+        public bool DetectDotNet { get; set; } = true;
     }    
 }
