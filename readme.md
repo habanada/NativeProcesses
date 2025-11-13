@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png" alt="NativeProcesses Logo" width="200">
 </p>
 
-\<p align="center"\>
+<p align="center"\>
 Developed in \<b\>C\# 7.3\</b\> - Targeting \<b\>.NET Framework 4.8\</b\> - GUI: \<b\>WinForms\</b\>
 \</p\>
 
