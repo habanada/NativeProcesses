@@ -1,19 +1,25 @@
-<p align="center">
-<img src="[https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png](https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png)" alt="NativeProcesses Logo" width="200">
-</p>
-<p align="center">
-<b>High-performance .NET 4.8 framework</b> for real-time Windows process monitoring, control, analysis, and <b>.NET managed code inspection</b>  including secure remote communication over TLS.
-</p>
+Here is the updated `README.md`, rewritten in English and expanded to incorporate all the new features from your provided source code, such as the .NET ClrMD inspection, advanced module/handle/memory enumeration, and network optimizations.
 
-<p align="center">
-Developed in <b>C# 7.3</b>  Targeting <b>.NET Framework 4.8</b>  GUI: <b>WinForms</b>
-</p>
+It follows the same professional and comprehensive style as your example.
+
+-----
+
+\<p align="center"\>
+\<img src="[https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png](https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png)" alt="NativeProcesses Logo" width="200"\>
+\</p\>
+\<p align="center"\>
+\<b\>High-performance .NET 4.8 framework\</b\> for real-time Windows process monitoring, control, analysis, and \<b\>.NET managed code inspection\</b\> - including secure remote communication over TLS.
+\</p\>
+
+\<p align="center"\>
+Developed in \<b\>C\# 7.3\</b\> - Targeting \<b\>.NET Framework 4.8\</b\> - GUI: \<b\>WinForms\</b\>
+\</p\>
 
 # NativeProcesses Framework
 
 A modular, high-performance .NET framework for real-time monitoring, control, and in-depth analysis of Windows processes. It includes secure remote communication over TLS and advanced inspection capabilities for managed .NET applications.
 
-Developed in **C# 7.3**, targeting **.NET Framework 4.8**, with **WinForms** used for demonstration simplicity.
+Developed in **C\# 7.3**, targeting **.NET Framework 4.8**, with **WinForms** used for demonstration simplicity.
 
 -----
 
@@ -46,45 +52,45 @@ This enables:
 ## Architecture Overview
 
 ```
-
- Application Layer (WinForms, Services) 
- e.g. ProcessInfoViewModel, RemoteClient 
-
- 
+┌──────────────────────────────────────────┐
+│ Application Layer (WinForms, Services) │
+│ e.g. ProcessInfoViewModel, RemoteClient │
+└──────────────────┬──────────────────────┘
+ │
  IProcessNotifier
-
- ProcessService (Central Hub) 
- Aggregates, caches, raises events, 
- manages async detail-loading queue 
-
- 
+┌──────────────────▼──────────────────────┐
+│ ProcessService (Central Hub) │
+│ Aggregates, caches, raises events, │
+│ manages async detail-loading queue │
+└──────────────────┬──────────────────────┘
+ │
  IProcessEventProvider
-
- Provider Layer (Pluggable) 
- Polling, ETW, WMI, Hybrid providers 
-
- 
-
- Low-Level Access  Inspection Layer 
-   
-  Native (PInvoke)   Managed (ClrMD)  
-  ManagedProcess   DotNetInspector  
-  NativeLister    
-  HandleLister    
-  PebEnumerator    
-   
-
- 
- Windows Kernel APIs  .NET Runtime
+┌──────────────────▼──────────────────────┐
+│ Provider Layer (Pluggable) │
+│ Polling, ETW, WMI, Hybrid providers │
+└──────────────────┬──────────────────────┘
+ │
+┌──────────────────▼──────────────────────┐
+│ Low-Level Access & Inspection Layer │
+│ ┌────────────────┐ ┌─────────────────┐ │
+│ │ Native (PInvoke) │ │ Managed (ClrMD) │ │
+│ │ ManagedProcess │ │ DotNetInspector │ │
+│ │ NativeLister │ │ │ │
+│ │ HandleLister │ │ │ │
+│ │ PebEnumerator │ │ │ │
+│ └────────────────┘ └─────────────────┘ │
+└──────────────────┬──────────────────────┘
+ │
+ Windows Kernel APIs & .NET Runtime
 ```
 
 -----
 
-##  Core Layer - `NativeProcesses.Core`
+## 🖥️ Core Layer - `NativeProcesses.Core`
 
 ### ProcessService
 
-**Purpose:** The central class consumed by applications. It acts as the hub and faade for process information management.
+**Purpose:** The central class consumed by applications. It acts as the hub and façade for process information management.
 
 **Responsibilities:**
 
@@ -96,7 +102,7 @@ This enables:
 
 -----
 
-###  Provider System
+### 📡 Provider System
 
 Providers deliver raw process data from different sources and can be freely swapped or combined.
 
@@ -123,7 +129,7 @@ Providers deliver raw process data from different sources and can be freely swap
 
 -----
 
-###  Low-Level Access (Native  Managed)
+### 🧬 Low-Level Access (Native & Managed)
 
 This layer is composed of static classes and helpers that perform the actual data retrieval.
 
@@ -175,7 +181,7 @@ This layer is composed of static classes and helpers that perform the actual dat
 
 -----
 
-##  Network Layer - `NativeProcesses.Network`
+## ☁️ Network Layer - `NativeProcesses.Network`
 
 ### SecureTcpServer
 
@@ -202,9 +208,9 @@ The server-side bridge connecting the `ProcessService` to network clients.
 
 -----
 
-##  Example Applications
+## 🚀 Example Applications
 
-### 1. Local Process Viewer (`UILocal`)
+### 1\. Local Process Viewer (`UILocal`)
 
 A feature-rich WinForms demo application showcasing the framework's local capabilities.
 
@@ -214,12 +220,12 @@ A feature-rich WinForms demo application showcasing the framework's local capabi
  * Secondary grid showing threads for the selected process.
  * Dynamic thread start-address resolution (e.g., `ntdll.dll+0x...`).
  * Dark title bar and modern styling.
- * **Extensive Diagnostics (Context Menu  F-Keys):**
+ * **Extensive Diagnostics (Context Menu & F-Keys):**
  * `F3`: Show UWP/MSIX Package Info (if applicable).
- * `F4`: Show Process Windows (Visible  Hidden).
+ * `F4`: Show Process Windows (Visible & Hidden).
  * `F5`: Show Loaded Modules (DLLs).
  * `F6`: Show Open Handles (requires Admin).
- * `F7`: Show extended Thread I/O  Memory Priorities.
+ * `F7`: Show extended Thread I/O & Memory Priorities.
  * `F8`: Manually resolve thread start address.
  * `F9`: Show Virtual Memory Regions.
  * `F10`: Show .NET Heap Stats (ClrMD).
@@ -228,7 +234,7 @@ A feature-rich WinForms demo application showcasing the framework's local capabi
  * ...and menu items for .NET Locks, Finalizer Queue, ThreadPool, and more.
  * **System-Wide Network Monitor:** A button to open a new form showing all system TCP/UDP connections and their owning processes.
 
-### 2. Remote Process Server (`Server`)
+### 2\. Remote Process Server (`Server`)
 
 A console app that hosts the `ProcessService` and `SecureTcpServer`, waiting for client connections.
 
@@ -252,7 +258,7 @@ Console.ReadLine(); // Wait for exit
 hostInstance.ShutdownServer();
 ```
 
-### 3. Remote Process Viewer (`RemoteClient`)
+### 3\. Remote Process Viewer (`RemoteClient`)
 
 A WinForms client that connects to the `Server`, displays the process list in real-time, and allows remote control (Kill, Suspend, Resume, Get Thread Priorities).
 
@@ -270,7 +276,7 @@ if (await client.ConnectAsync())
 
 -----
 
-###  Network Security  Certificate Validation
+### 🔒 Network Security & Certificate Validation
 
 The `SecureTcpClient` implements **Certificate Pinning** by default to prevent Man-in-the-Middle (MITM) attacks. It works by:
 
@@ -281,11 +287,11 @@ The `SecureTcpClient` implements **Certificate Pinning** by default to prevent M
 
 -----
 
-##  Technical Details
+## 🛠️ Technical Details
 
 | Component | Technology |
 | :--- | :--- |
-| Language | C# 7.3 |
+| Language | C\# 7.3 |
 | Framework | .NET Framework 4.8 |
 | GUI | WinForms |
 | Network | TCP/TLS 1.2 + Deflate + JSON (Newtonsoft) |
@@ -294,7 +300,7 @@ The `SecureTcpClient` implements **Certificate Pinning** by default to prevent M
 
 -----
 
-##  Dependencies
+## 📦 Dependencies
 
 The `NativeProcesses.Core` library itself is lightweight. Only the optional extensions and UI layers require external packages.
 
@@ -316,36 +322,36 @@ Install-Package Microsoft.Windows.SDK.Contracts
 
 -----
 
-##  Repository Layout
+## 🗺️ Repository Layout
 
 ```
 NativeProcesses.Core/
- Engine/ # ProcessService, IProcessNotifier, IEngineLogger
- Inspection/ # DotNetInspector.cs (ClrMD)
- Models/ # FullProcessInfo, ThreadInfo, DotNetHeapStat, etc.
- Native/ # ManagedProcess.cs, ManagedThread.cs, NativeHandleLister.cs
-  PebModuleEnumerator.cs, PsApiModuleEnumerator.cs, NetworkManager.cs
-  WindowManager.cs, SignatureVerifier.cs, NativeProcessLister.cs
- Providers/ # PollingProcessProvider.cs, EtwProcessProvider.cs, etc.
+├── Engine/ # ProcessService, IProcessNotifier, IEngineLogger
+├── Inspection/ # DotNetInspector.cs (ClrMD)
+├── Models/ # FullProcessInfo, ThreadInfo, DotNetHeapStat, etc.
+├── Native/ # ManagedProcess.cs, ManagedThread.cs, NativeHandleLister.cs
+│ ├── PebModuleEnumerator.cs, PsApiModuleEnumerator.cs, NetworkManager.cs
+│ └── WindowManager.cs, SignatureVerifier.cs, NativeProcessLister.cs
+└── Providers/ # PollingProcessProvider.cs, EtwProcessProvider.cs, etc.
  
 NativeProcesses.Network/
- SecureTcpServer.cs
- SecureTcpClient.cs
- ProcessNetworkHost.cs
- ProcessVolatileUpdate.cs
+├── SecureTcpServer.cs
+├── SecureTcpClient.cs
+├── ProcessNetworkHost.cs
+└── ProcessVolatileUpdate.cs
 
 UI/
- UILocal/ # Local WinForms Demo
-  MainForm.cs, DetailForm.cs, ProcessInfoViewModel.cs, UwpManager.cs
- RemoteClient/ # Remote WinForms Client Demo
-  MainForm.cs, ProcessInfoViewModel.cs
- Server/ # Remote Console Server Host
-  Program.cs
+├── UILocal/ # Local WinForms Demo
+│ ├── MainForm.cs, DetailForm.cs, ProcessInfoViewModel.cs, UwpManager.cs
+├── RemoteClient/ # Remote WinForms Client Demo
+│ └── MainForm.cs, ProcessInfoViewModel.cs
+└── Server/ # Remote Console Server Host
+ └── Program.cs
 ```
 
 -----
 
-##  Quickstart
+## 🚀 Quickstart
 
 ### Local Demo (`UILocal`)
 
@@ -368,25 +374,25 @@ UI/
  * Set **`RemoteClient`** as the startup project (can run as a normal user).
  * Run the client and click "Connect".
 
-#### 1. Create the Certificate (PowerShell)
+#### 1\. Create the Certificate (PowerShell)
 
 Run **PowerShell as Administrator**:
 
 ```powershell
-New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "cert:CurrentUserMy" -FriendlyName "NativeProcessServerCert" -KeyUsage DigitalSignature, KeyEncipherment
+New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "cert:\CurrentUser\My" -FriendlyName "NativeProcessServerCert" -KeyUsage DigitalSignature, KeyEncipherment
 ```
 
 *(You can replace `"localhost"` with your server's IP/DNS name if connecting across machines.)*
 
-#### 2. Export the Certificates (certmgr.msc)
+#### 2\. Export the Certificates (certmgr.msc)
 
 1. Press `Win + R`, type `certmgr.msc`, and press **Enter**.
-2. Navigate to **Personal**  **Certificates**.
+2. Navigate to **Personal** → **Certificates**.
 3. Find the certificate "NativeProcessServerCert" or "localhost".
 
 **A. Export `.pfx` (for the Server):**
 
-1. Right-click  **All Tasks**  **Export...**
+1. Right-click → **All Tasks** → **Export...**
 2. Select **"Yes, export the private key"**.
 3. Use the default export format (PFX).
 4. Set a **password** (e.g., `password`, as used in the demo code).
@@ -394,20 +400,20 @@ New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "cert:CurrentU
 
 **B. Export `.cer` (for the Client):**
 
-1. Right-click again  **All Tasks**  **Export...**
+1. Right-click again → **All Tasks** → **Export...**
 2. Select **"No, do not export the private key"**.
 3. Choose **"Base-64 encoded X.509 (.CER)"**.
 4. Save as `server.cer` in your **`RemoteClient`** project's output directory.
 
 -----
 
-##  Project Status  Future Scope
+## 📈 Project Status & Future Scope
 
 This framework is stable and feature-complete for its .NET 4.8 target. The "Known Issues" from the previous version have been resolved.
 
- *  **Async Detail Loading:** Implemented with a dedicated producer-consumer queue to prevent ThreadPool starvation.
- *  **Log Denoising:** Repetitive "Access Denied" errors are now suppressed in the logger.
- *  **Network Optimization:** Server now broadcasts lightweight `ProcessVolatileUpdate` packets, dramatically reducing network traffic.
+ * ✅ **Async Detail Loading:** Implemented with a dedicated producer-consumer queue to prevent ThreadPool starvation.
+ * ✅ **Log Denoising:** Repetitive "Access Denied" errors are now suppressed in the logger.
+ * ✅ **Network Optimization:** Server now broadcasts lightweight `ProcessVolatileUpdate` packets, dramatically reducing network traffic.
 
 Future development would focus on modernization:
 
@@ -417,7 +423,7 @@ Future development would focus on modernization:
 
 -----
 
-## License  Author
+## License & Author
 
 This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
 
@@ -446,26 +452,26 @@ This project utilizes the following open-source libraries. Their original licens
 
 ### Newtonsoft.Json
 
-Copyright  James Newton-King
+Copyright © James Newton-King
 Licensed under the [MIT License](https://licenses.nuget.org/MIT)
 
 ### Microsoft.Diagnostics.Tracing.TraceEvent
 
-Copyright  Microsoft Corporation
+Copyright © Microsoft Corporation
 Licensed under the [MIT License](https://licenses.nuget.org/MIT)
 
 ### Microsoft.Diagnostics.Runtime (ClrMD)
 
-Copyright  Microsoft Corporation
+Copyright © Microsoft Corporation
 Licensed under the [MIT License](https://licenses.nuget.org/MIT)
 
 ### Microsoft.Windows.SDK.Contracts
 
-Copyright  Microsoft Corporation
+Copyright © Microsoft Corporation
 Licensed under the [MIT License](https://licenses.nuget.org/MIT)
 
 -----
 
-<p align="center">
- If you find this project useful, please consider giving it a star on GitHub!
-</p>
+\<p align="center"\>
+⭐ If you find this project useful, please consider giving it a star on GitHub\!
+\</p\>
