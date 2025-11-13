@@ -1,15 +1,6 @@
-Here is the updated `README.md`, rewritten in English and expanded to incorporate all the new features from your provided source code, such as the .NET ClrMD inspection, advanced module/handle/memory enumeration, and network optimizations.
-
-It follows the same professional and comprehensive style as your example.
-
------
-
-\<p align="center"\>
-\<img src="[https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png](https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png)" alt="NativeProcesses Logo" width="200"\>
-\</p\>
-\<p align="center"\>
-\<b\>High-performance .NET 4.8 framework\</b\> for real-time Windows process monitoring, control, analysis, and \<b\>.NET managed code inspection\</b\> - including secure remote communication over TLS.
-\</p\>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/habanada/NativeProcesses/refs/heads/dev/Logo.png" alt="NativeProcesses Logo" width="200">
+</p>
 
 \<p align="center"\>
 Developed in \<b\>C\# 7.3\</b\> - Targeting \<b\>.NET Framework 4.8\</b\> - GUI: \<b\>WinForms\</b\>
