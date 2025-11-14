@@ -13,6 +13,7 @@ using NativeProcesses.Core.Inspection;
 using System.Runtime.InteropServices;
 using NativeProcesses.Core.Models;
 using System.Linq;
+using NativeProcesses.Core.Inspection;
 
 namespace NativeProcesses.Core.Native
 {
@@ -30,7 +31,97 @@ namespace NativeProcesses.Core.Native
 
 
 
+        public static Task<HookDetectionResult> ScanProcessForHooksAsync(FullProcessInfo processInfo, IEngineLogger logger = null)
+        {
+            return Task.Run(async () =>
+            {
+                int pid = processInfo.Pid;
+                var result = new HookDetectionResult(pid);
+                var inspector = new SecurityInspector(logger);
+                var access = ProcessAccessFlags.QueryInformation | ProcessAccessFlags.VmRead | ProcessAccessFlags.QueryLimitedInformation;
+                List<ProcessModuleInfo> modules;
+                List<VirtualMemoryRegion> regions;
+                try
+                {
+                    modules = await GetModulesAsync(pid, logger);
+                    regions = await GetVirtualMemoryRegionsAsync(pid, logger);
+                }
+                catch (Exception ex)
+                {
+                    result.Errors.Add($"Failed to list modules or memory regions: {ex.Message}");
+                    return result;
+                }
+                var ntdllModule = modules.FirstOrDefault(m => m.BaseDllName.Equals("ntdll.dll", StringComparison.OrdinalIgnoreCase));
+                if (ntdllModule == null)
+                {
+                    result.Errors.Add("Failed to find ntdll.dll in the process.");
+                    return result;
+                }
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    foreach (var mod in modules)
+                    {
+                        if (string.IsNullOrEmpty(mod.FullDllName) || mod.FullDllName.StartsWith("["))
+                        {
+                            continue;
+                        }
+                        try
+                        {
+                            var inlineHooks = inspector.CheckForInlineHooks(proc, mod.DllBase, mod.FullDllName);
+                            if (inlineHooks.Count > 0)
+                            {
+                                result.InlineHooks.AddRange(inlineHooks);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            result.Errors.Add($"Error scanning {mod.BaseDllName} for inline hooks: {ex.Message}");
+                        }
+                        try
+                        {
+                            var iatHooks = inspector.CheckIatHooks(proc, mod.DllBase, mod.BaseDllName, ntdllModule.DllBase, modules);
+                            if (iatHooks.Count > 0)
+                            {
+                                result.IatHooks.AddRange(iatHooks);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            result.Errors.Add($"Error scanning {mod.BaseDllName} for IAT hooks: {ex.Message}");
+                        }
+                    }
 
+                    // 3. Prüfe auf verdächtige Threads (Shellcode)
+                    try
+                    {
+                        var suspiciousThreads = inspector.CheckForSuspiciousThreads(processInfo.Threads, modules, regions);
+                        if (suspiciousThreads.Count > 0)
+                        {
+                            result.SuspiciousThreads.AddRange(suspiciousThreads);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        result.Errors.Add($"Error scanning for suspicious threads: {ex.Message}");
+                    }
+                    // 4. NEU: Prüfe auf verdächtige Speicherregionen (RWX/RX)
+                    try
+                    {
+                        var suspiciousRegions = inspector.CheckForSuspiciousMemoryRegions(regions);
+                        if (suspiciousRegions.Count > 0)
+                        {
+                            result.SuspiciousMemoryRegions.AddRange(suspiciousRegions);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        result.Errors.Add($"Error scanning for suspicious memory regions: {ex.Message}");
+                    }
+
+                }
+                return result;
+            });
+        }
         public static bool TrimWorkingSet(int pid)
         {
             try
