@@ -10,6 +10,9 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using NativeProcesses.Core.Inspection;
+using System.Runtime.InteropServices;
+using NativeProcesses.Core.Models;
+using System.Linq;
 
 namespace NativeProcesses.Core.Native
 {
@@ -28,7 +31,90 @@ namespace NativeProcesses.Core.Native
 
 
 
+        public static bool TrimWorkingSet(int pid)
+        {
+            try
+            {
+                var access = ProcessAccessFlags.SetQuota | ProcessAccessFlags.QueryInformation;
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    proc.TrimWorkingSet();
+                    return true;
+                }
+            }
+            catch (Win32Exception)
+            {
+                return false;
+            }
+        }
 
+        public static bool SetAffinity(int pid, IntPtr affinityMask)
+        {
+            try
+            {
+                var access = ProcessAccessFlags.SetInformation | ProcessAccessFlags.QueryLimitedInformation;
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    proc.SetAffinity(affinityMask);
+                    return true;
+                }
+            }
+            catch (Win32Exception)
+            {
+                return false;
+            }
+        }
+
+        public static bool SetPriorityBoostDisabled(int pid, bool isDisabled)
+        {
+            try
+            {
+                var access = ProcessAccessFlags.SetInformation | ProcessAccessFlags.QueryLimitedInformation;
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    proc.SetPriorityBoostDisabled(isDisabled);
+                    return true;
+                }
+            }
+            catch (Win32Exception)
+            {
+                return false;
+            }
+        }
+
+        public static bool SetIoPriority(int pid, IoPriorityHint priority)
+        {
+            try
+            {
+                var access = ProcessAccessFlags.SetInformation;
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    proc.SetIoPriority(priority);
+                    return true;
+                }
+            }
+            catch (Win32Exception)
+            {
+                return false;
+            }
+        }
+
+        public static bool SetEcoMode(int pid, bool isEnabled)
+        {
+            try
+            {
+                var access = ProcessAccessFlags.SetInformation;
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    proc.SetEcoMode(isEnabled);
+                    return true;
+                }
+            }
+            catch (Win32Exception)
+            {
+                return false;
+            }
+        }
 
         public static Task<List<Models.NetworkConnectionInfo>> GetNetworkConnectionsAsync(IEngineLogger logger = null)
         {
@@ -166,6 +252,55 @@ namespace NativeProcesses.Core.Native
                 }
             });
         }
+        public static Task<List<NativeHandleInfo>> GetOpenFilesAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(async () =>
+            {
+                try
+                {
+                    // 1. Wir rufen die vorhandene Methode auf, um alle Handles zu holen
+                    var allHandles = await GetHandlesAsync(pid, logger);
+
+                    // 2. Wir filtern die Liste, bevor wir sie zurückgeben
+                    var fileHandles = allHandles
+                        .Where(h => h.TypeName.Equals("File", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    return fileHandles;
+                }
+                catch (Exception ex)
+                {
+                    logger?.Log(LogLevel.Error, $"GetOpenFilesAsync failed for PID {pid}.", ex);
+                    return new List<NativeHandleInfo>();
+                }
+            });
+        }
+        public static Task<List<NativeHandleInfo>> GetHandlesByTypeAsync(int pid, string typeNameFilter, IEngineLogger logger = null)
+        {
+            return Task.Run(async () =>
+            {
+                if (string.IsNullOrEmpty(typeNameFilter))
+                {
+                    return await GetHandlesAsync(pid, logger);
+                }
+
+                try
+                {
+                    var allHandles = await GetHandlesAsync(pid, logger);
+
+                    var filteredHandles = allHandles
+                        .Where(h => h.TypeName.Equals(typeNameFilter, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    return filteredHandles;
+                }
+                catch (Exception ex)
+                {
+                    logger?.Log(LogLevel.Error, $"GetHandlesByTypeAsync failed for PID {pid} (Filter: {typeNameFilter}).", ex);
+                    return new List<NativeHandleInfo>();
+                }
+            });
+        }
         public static Task<List<Models.VirtualMemoryRegion>> GetVirtualMemoryRegionsAsync(int pid, IEngineLogger logger = null)
         {
             return Task.Run(() =>
@@ -185,6 +320,42 @@ namespace NativeProcesses.Core.Native
                 using (var proc = new ManagedProcess(pid, ProcessAccessFlags.Terminate))
                 {
                     proc.Kill();
+                    return true;
+                }
+            }
+            catch (Win32Exception)
+            {
+                return false;
+            }
+        }
+        public static bool HardKill(int pid)
+        {
+            try
+            {
+                var access = ProcessAccessFlags.SetQuota | ProcessAccessFlags.Terminate;
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    proc.HardKillUsingJob();
+                    return true;
+                }
+            }
+            catch (Win32Exception)
+            {
+                return false;
+            }
+        }
+        public static bool InjectionKill(int pid)
+        {
+            try
+            {
+                var access = ProcessAccessFlags.CreateThread |
+                             ProcessAccessFlags.VmOperation |
+                             ProcessAccessFlags.VmWrite |
+                             ProcessAccessFlags.QueryInformation;
+
+                using (var proc = new ManagedProcess(pid, access))
+                {
+                    proc.KillByThreadInjection();
                     return true;
                 }
             }

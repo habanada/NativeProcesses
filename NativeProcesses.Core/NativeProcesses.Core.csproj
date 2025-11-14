@@ -229,6 +229,7 @@
     <Compile Include="Models\UwpPackageInfo.cs" />
     <Compile Include="Models\VirtualMemoryRegion.cs" />
     <Compile Include="Models\WindowInfo.cs" />
+    <Compile Include="Native\HandleTypeFilter.cs" />
     <Compile Include="Native\IpHelper.cs" />
     <Compile Include="Native\ManagedProcess.cs" />
     <Compile Include="Native\NativeHandleLister.cs" />

@@ -20,7 +20,7 @@ namespace NativeProcesses.Core.Native
         private const int ProcessJobObjectInformation = 7;
         private const int ProcessDebugObjectHandle = 30;
         private const int ProcessPowerThrottlingState = 45;
-
+        private const int ProcessIoPriority = 34;
 
         #region P/Invoke Kernel32
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -107,6 +107,43 @@ namespace NativeProcesses.Core.Native
             IntPtr MemoryInformation,
             UIntPtr MemoryInformationLength,
             out UIntPtr ReturnLength);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateJobObjectW(IntPtr lpJobAttributes, string lpName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetInformationJobObject(
+            IntPtr hJob,
+            int JobObjectInfoClass,
+            IntPtr lpJobObjectInfo,
+            uint cbJobObjectInfoLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true, SetLastError = true)]
+        private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr CreateRemoteThread(
+            IntPtr hProcess,
+            IntPtr lpThreadAttributes,
+            uint dwStackSize,
+            IntPtr lpStartAddress,
+            IntPtr lpParameter,
+            uint dwCreationFlags,
+            out IntPtr lpThreadId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetProcessAffinityMask(IntPtr hProcess, IntPtr dwProcessAffinityMask);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetProcessPriorityBoost(IntPtr hProcess, bool bDisablePriorityBoost);
+
         #endregion
         #region P/Invoke Kernel32 (AppModel)
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -118,7 +155,11 @@ namespace NativeProcesses.Core.Native
         private const int ERROR_INSUFFICIENT_BUFFER = 122;
         public const int APPMODEL_ERROR_NO_PACKAGE = 15700;
         #endregion
-
+        #region P/Invoke Psapi
+        [DllImport("psapi.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool EmptyWorkingSet(IntPtr hProcess);
+        #endregion
         #region P/Invoke Ntdll
         [DllImport("ntdll.dll", SetLastError = true)]
         private static extern uint NtSuspendProcess(IntPtr processHandle);
@@ -133,6 +174,12 @@ namespace NativeProcesses.Core.Native
             IntPtr processInformation,
             uint processInformationLength,
             out uint returnLength);
+        [DllImport("ntdll.dll", SetLastError = true)]
+        private static extern int NtSetInformationProcess(
+             IntPtr processHandle,
+             int processInformationClass,
+             IntPtr processInformation,
+             uint processInformationLength);
         #endregion
 
         #region P/Invoke Advapi32
@@ -377,6 +424,34 @@ namespace NativeProcesses.Core.Native
             PAGE_NOCACHE = 0x200,
             PAGE_WRITECOMBINE = 0x400
         }
+
+        private const int JobObjectExtendedLimitInformation = 9;
+        private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+        {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public IntPtr MinimumWorkingSetSize;
+            public IntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public IntPtr Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        {
+            public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+            public ProcessIoCounters IoInfo; // Wir verwenden Ihre vorhandene ProcessIoCounters-Struktur
+            public IntPtr ProcessMemoryLimit;
+            public IntPtr JobMemoryLimit;
+            public IntPtr PeakProcessMemoryUsed;
+            public IntPtr PeakJobMemoryUsed;
+        }
         #endregion
 
         #region Pfadkonvertierung
@@ -454,6 +529,48 @@ namespace NativeProcesses.Core.Native
         }
         #endregion
         #region Process Control
+        public void HardKillUsingJob()
+        {
+            IntPtr hJob = IntPtr.Zero;
+            IntPtr extendedInfoPtr = IntPtr.Zero;
+            try
+            {
+                hJob = CreateJobObjectW(IntPtr.Zero, null);
+                if (hJob == IntPtr.Zero)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObjectW failed.");
+                }
+
+                var extendedInfo = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+                extendedInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+                int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+                extendedInfoPtr = Marshal.AllocHGlobal(size);
+                Marshal.StructureToPtr(extendedInfo, extendedInfoPtr, false);
+
+                if (!SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, extendedInfoPtr, (uint)size))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "SetInformationJobObject failed.");
+                }
+
+                if (!AssignProcessToJobObject(hJob, this.Handle))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed.");
+                }
+            }
+            finally
+            {
+                if (extendedInfoPtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(extendedInfoPtr);
+                }
+                if (hJob != IntPtr.Zero)
+                {
+                    CloseHandle(hJob);
+                }
+            }
+        }
+
         public void Kill()
         {
             if (!TerminateProcess(this.Handle, 1))
@@ -461,7 +578,117 @@ namespace NativeProcesses.Core.Native
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
         }
+        public void KillByThreadInjection()
+        {
+            IntPtr hKernel32 = IntPtr.Zero;
+            IntPtr pExitProcess = IntPtr.Zero;
+            IntPtr hRemoteThread = IntPtr.Zero;
+            try
+            {
+                hKernel32 = GetModuleHandle("kernel32.dll");
+                if (hKernel32 == IntPtr.Zero)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "GetModuleHandle(kernel32.dll) failed.");
+                }
 
+                pExitProcess = GetProcAddress(hKernel32, "ExitProcess");
+                if (pExitProcess == IntPtr.Zero)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "GetProcAddress(ExitProcess) failed.");
+                }
+
+                hRemoteThread = CreateRemoteThread(this.Handle, IntPtr.Zero, 0, pExitProcess, IntPtr.Zero, 0, out _);
+                if (hRemoteThread == IntPtr.Zero)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateRemoteThread failed.");
+                }
+            }
+            finally
+            {
+                if (hRemoteThread != IntPtr.Zero)
+                {
+                    CloseHandle(hRemoteThread);
+                }
+            }
+        }
+        public void TrimWorkingSet()
+        {
+            if (!EmptyWorkingSet(this.Handle))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "EmptyWorkingSet failed.");
+            }
+        }
+
+        public void SetAffinity(IntPtr affinityMask)
+        {
+            if (!SetProcessAffinityMask(this.Handle, affinityMask))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "SetProcessAffinityMask failed.");
+            }
+        }
+
+        public void SetPriorityBoostDisabled(bool isDisabled)
+        {
+            if (!SetProcessPriorityBoost(this.Handle, isDisabled))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "SetProcessPriorityBoost failed.");
+            }
+        }
+
+        public void SetIoPriority(Models.IoPriorityHint priority)
+        {
+            IntPtr buffer = IntPtr.Zero;
+            try
+            {
+                int size = sizeof(int);
+                buffer = Marshal.AllocHGlobal(size);
+                Marshal.WriteInt32(buffer, (int)priority);
+
+                int status = NtSetInformationProcess(this.Handle, ProcessIoPriority, buffer, (uint)size);
+                if (status != 0)
+                {
+                    throw new Win32Exception($"NtSetInformationProcess(ProcessIoPriority) failed with status: {status}");
+                }
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+        }
+
+        public void SetEcoMode(bool isEnabled)
+        {
+            IntPtr buffer = IntPtr.Zero;
+            try
+            {
+                var state = new PROCESS_POWER_THROTTLING_STATE
+                {
+                    Version = 1,
+                    ControlMask = POWER_THROTTLING_PROCESS_ENFORCE,
+                    StateMask = isEnabled ? POWER_THROTTLING_PROCESS_ENFORCE : 0
+                };
+
+                int size = Marshal.SizeOf(typeof(PROCESS_POWER_THROTTLING_STATE));
+                buffer = Marshal.AllocHGlobal(size);
+                Marshal.StructureToPtr(state, buffer, false);
+
+                int status = NtSetInformationProcess(this.Handle, ProcessPowerThrottlingState, buffer, (uint)size);
+                if (status != 0)
+                {
+                    throw new Win32Exception($"NtSetInformationProcess(ProcessPowerThrottlingState) failed with status: {status}");
+                }
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+        }
         public void Suspend()
         {
             uint status = NtSuspendProcess(this.Handle);
