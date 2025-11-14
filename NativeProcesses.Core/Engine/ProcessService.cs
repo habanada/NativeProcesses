@@ -34,6 +34,7 @@ namespace NativeProcesses.Core.Engine
         public event Action<FullProcessInfo> ProcessAdded;
         public event Action<int> ProcessRemoved;
         public event Action<FullProcessInfo> ProcessUpdated;
+        public event Action<ProcessVolatileUpdate> ProcessVolatileUpdated;
 
         public bool UseCpuSmoothing { get; set; } = true;
         public double CpuSmoothingFactor { get; set; } = 0.3;
@@ -113,13 +114,33 @@ namespace NativeProcesses.Core.Engine
                 ProcessRemoved?.Invoke(pid);
             }
         }
-
         void IProcessNotifier.OnProcessStatisticsUpdate(int pid, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority, List<ThreadInfo> threadInfos)
         {
             if (_processCache.TryGetValue(pid, out FullProcessInfo info))
             {
                 info.UpdateFastData(info.Name, workingSet, pagedPool, nonPagedPool, privatePageCount, pagefileUsage, threads, priority, threadInfos);
-                ProcessUpdated?.Invoke(info.CreateSnapshot());
+
+                var update = new ProcessVolatileUpdate
+                {
+                    Pid = pid,
+                    WorkingSet = workingSet,
+                    PagedPool = pagedPool,
+                    NonPagedPool = nonPagedPool,
+                    PrivatePageCount = privatePageCount,
+                    PagefileUsage = pagefileUsage,
+                    ThreadCount = (int)threads,
+                    BasePriority = priority,
+
+                    Cpu = info.CpuUsagePercent,
+                    TotalReadBytes = info.TotalReadBytes,
+                    TotalWriteBytes = info.TotalWriteBytes,
+                    TotalReadOps = info.TotalReadOps,
+                    TotalWriteOps = info.TotalWriteOps,
+                    TotalPageFaults = info.TotalPageFaults,
+                    TotalNetworkSend = info.TotalNetworkSend,
+                    TotalNetworkRecv = info.TotalNetworkRecv
+                };
+                ProcessVolatileUpdated?.Invoke(update);
             }
         }
 
@@ -132,7 +153,28 @@ namespace NativeProcesses.Core.Engine
                 info.TotalReadOps += readOpsDelta;
                 info.TotalWriteOps += writeOpsDelta;
                 info.TotalPageFaults += pageFaultDelta;
-                ProcessUpdated?.Invoke(info.CreateSnapshot());
+
+                var update = new ProcessVolatileUpdate
+                {
+                    Pid = pid,
+                    TotalReadBytes = info.TotalReadBytes,
+                    TotalWriteBytes = info.TotalWriteBytes,
+                    TotalReadOps = info.TotalReadOps,
+                    TotalWriteOps = info.TotalWriteOps,
+                    TotalPageFaults = info.TotalPageFaults,
+
+                    Cpu = info.CpuUsagePercent,
+                    WorkingSet = info.WorkingSetSize,
+                    PagedPool = info.PagedPoolUsage,
+                    NonPagedPool = info.NonPagedPoolUsage,
+                    PrivatePageCount = info.PrivatePageCount,
+                    PagefileUsage = info.PagefileUsage,
+                    ThreadCount = (int)info.NumberOfThreads,
+                    BasePriority = info.BasePriority,
+                    TotalNetworkSend = info.TotalNetworkSend,
+                    TotalNetworkRecv = info.TotalNetworkRecv
+                };
+                ProcessVolatileUpdated?.Invoke(update);
             }
         }
 
@@ -142,7 +184,7 @@ namespace NativeProcesses.Core.Engine
             {
                 if (this.UseCpuSmoothing)
                 {
-                    double alpha = this.CpuSmoothingFactor;
+                    double alpha = Math.Max(0.05, this.CpuSmoothingFactor);
                     if (info.CpuUsagePercent == 0)
                     {
                         info.CpuUsagePercent = cpuPercent;
@@ -156,9 +198,131 @@ namespace NativeProcesses.Core.Engine
                 {
                     info.CpuUsagePercent = cpuPercent;
                 }
-                ProcessUpdated?.Invoke(info.CreateSnapshot());
+
+                var update = new ProcessVolatileUpdate
+                {
+                    Pid = pid,
+                    Cpu = info.CpuUsagePercent,
+
+                    WorkingSet = info.WorkingSetSize,
+                    PagedPool = info.PagedPoolUsage,
+                    NonPagedPool = info.NonPagedPoolUsage,
+                    PrivatePageCount = info.PrivatePageCount,
+                    PagefileUsage = info.PagefileUsage,
+                    ThreadCount = (int)info.NumberOfThreads,
+                    BasePriority = info.BasePriority,
+                    TotalReadBytes = info.TotalReadBytes,
+                    TotalWriteBytes = info.TotalWriteBytes,
+                    TotalReadOps = info.TotalReadOps,
+                    TotalWriteOps = info.TotalWriteOps,
+                    TotalPageFaults = info.TotalPageFaults,
+                    TotalNetworkSend = info.TotalNetworkSend,
+                    TotalNetworkRecv = info.TotalNetworkRecv
+                };
+                ProcessVolatileUpdated?.Invoke(update);
             }
         }
+
+        void IProcessNotifier.OnProcessNetworkUpdate(int pid, long sendBytesDelta, long recvBytesDelta)
+        {
+            if (_processCache.TryGetValue(pid, out FullProcessInfo info))
+            {
+                try
+                {
+                    info.TotalNetworkSend += sendBytesDelta;
+                    info.TotalNetworkRecv += recvBytesDelta;
+
+                    var update = new ProcessVolatileUpdate
+                    {
+                        Pid = pid,
+                        TotalNetworkSend = info.TotalNetworkSend,
+                        TotalNetworkRecv = info.TotalNetworkRecv,
+
+                        Cpu = info.CpuUsagePercent,
+                        WorkingSet = info.WorkingSetSize,
+                        PagedPool = info.PagedPoolUsage,
+                        NonPagedPool = info.NonPagedPoolUsage,
+                        PrivatePageCount = info.PrivatePageCount,
+                        PagefileUsage = info.PagefileUsage,
+                        ThreadCount = (int)info.NumberOfThreads,
+                        BasePriority = info.BasePriority,
+                        TotalReadBytes = info.TotalReadBytes,
+                        TotalWriteBytes = info.TotalWriteBytes,
+                        TotalReadOps = info.TotalReadOps,
+                        TotalWriteOps = info.TotalWriteOps,
+                        TotalPageFaults = info.TotalPageFaults
+                    };
+                    ProcessVolatileUpdated?.Invoke(update);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Log(LogLevel.Debug, $"ProcessService.OnProcessNetworkUpdate failed for PID {pid}", ex);
+                }
+            }
+        }
+        //void IProcessNotifier.OnProcessStatisticsUpdate(int pid, long workingSet, long pagedPool, long nonPagedPool, long privatePageCount, long pagefileUsage, uint threads, int priority, List<ThreadInfo> threadInfos)
+        //{
+        //    if (_processCache.TryGetValue(pid, out FullProcessInfo info))
+        //    {
+        //        info.UpdateFastData(info.Name, workingSet, pagedPool, nonPagedPool, privatePageCount, pagefileUsage, threads, priority, threadInfos);
+        //        ProcessUpdated?.Invoke(info.CreateSnapshot());
+        //    }
+        //}
+
+        //void IProcessNotifier.OnProcessIoUpdate(int pid, long readBytesDelta, long writeBytesDelta, long readOpsDelta, long writeOpsDelta, uint pageFaultDelta)
+        //{
+        //    if (_processCache.TryGetValue(pid, out FullProcessInfo info))
+        //    {
+        //        info.TotalReadBytes += readBytesDelta;
+        //        info.TotalWriteBytes += writeBytesDelta;
+        //        info.TotalReadOps += readOpsDelta;
+        //        info.TotalWriteOps += writeOpsDelta;
+        //        info.TotalPageFaults += pageFaultDelta;
+        //        ProcessUpdated?.Invoke(info.CreateSnapshot());
+        //    }
+        //}
+
+        //void IProcessNotifier.OnProcessCpuUpdate(int pid, double cpuPercent)
+        //{
+        //    if (_processCache.TryGetValue(pid, out FullProcessInfo info))
+        //    {
+        //        if (this.UseCpuSmoothing)
+        //        {
+        //            //double alpha = Math.Max(0.05, this.CpuSmoothingFactor);
+        //            double alpha = this.CpuSmoothingFactor;
+        //            if (info.CpuUsagePercent == 0)
+        //            {
+        //                info.CpuUsagePercent = cpuPercent;
+        //            }
+        //            else
+        //            {
+        //                info.CpuUsagePercent = info.CpuUsagePercent * (1 - alpha) + cpuPercent * alpha;
+        //            }
+        //        }
+        //        else
+        //        {
+        //            info.CpuUsagePercent = cpuPercent;
+        //        }
+        //        ProcessUpdated?.Invoke(info.CreateSnapshot());
+        //    }
+        //}
+        //void IProcessNotifier.OnProcessNetworkUpdate(int pid, long sendBytesDelta, long recvBytesDelta)
+        //{
+        //    if (_processCache.TryGetValue(pid, out FullProcessInfo info))
+        //    {
+        //        try
+        //        {
+        //            info.TotalNetworkSend += sendBytesDelta;
+        //            info.TotalNetworkRecv += recvBytesDelta;
+        //            ProcessUpdated?.Invoke(info.CreateSnapshot());
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            _logger?.Log(LogLevel.Debug, $"ProcessService.OnProcessNetworkUpdate failed for PID {pid}", ex);
+        //        }
+        //    }
+        //}
+
         private void DetailLoadConsumerLoop()
         {
             try

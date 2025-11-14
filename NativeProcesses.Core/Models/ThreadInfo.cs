@@ -11,9 +11,9 @@ namespace NativeProcesses.Core
     public class ThreadInfo
     {
         public int ThreadId { get; private set; }
-        public int BasePriority { get; private set; }
-        public long KernelTime { get; private set; }
-        public long UserTime { get; private set; }
+        public int BasePriority { get; set; }
+        public long KernelTime { get; set; }
+        public long UserTime { get; set; }
         public IntPtr StartAddress { get; private set; }
         public ThreadInfo()
         {
@@ -30,6 +30,13 @@ namespace NativeProcesses.Core
         public ThreadInfo CreateSnapshot()
         {
             return (ThreadInfo)this.MemberwiseClone();
+        }
+        public void ApplyUpdate(ThreadInfo source)
+        {
+            this.BasePriority = source.BasePriority;
+            this.KernelTime = source.KernelTime;
+            this.UserTime = source.UserTime;
+            this.StartAddress = source.StartAddress;
         }
     }
 }

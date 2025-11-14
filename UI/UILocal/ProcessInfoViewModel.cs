@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using NativeProcesses.Core;
 using System.Collections.Generic;
 using System.Linq;
+using NativeProcesses.Core.Engine;
 
 namespace ProcessDemo
 {
@@ -307,6 +308,20 @@ namespace ProcessDemo
             get { return _dotNetVersion; }
             set { _dotNetVersion = value; Notify(); }
         }
+        private long _totalNetworkSend;
+        public long TotalNetworkSend
+        {
+            get { return _totalNetworkSend; }
+            set { _totalNetworkSend = value; Notify(); }
+        }
+
+        private long _totalNetworkRecv;
+        public long TotalNetworkRecv
+        {
+            get { return _totalNetworkRecv; }
+            set { _totalNetworkRecv = value; Notify(); }
+        }
+
         public ProcessInfoViewModel(FullProcessInfo source)
         {
             this.Pid = source.Pid;
@@ -399,6 +414,25 @@ namespace ProcessDemo
                 }
             }
         }
+        public void ApplyVolatileUpdate(ProcessVolatileUpdate update)
+        {
+            this.CpuUsagePercent = update.Cpu;
+            this.WorkingSetSize = update.WorkingSet;
+            this.NumberOfThreads = (uint)update.ThreadCount;
+            this.BasePriority = update.BasePriority;
+            this.TotalReadBytes = update.TotalReadBytes;
+            this.TotalWriteBytes = update.TotalWriteBytes;
+            this.TotalReadOps = update.TotalReadOps;
+            this.TotalWriteOps = update.TotalWriteOps;
+            this.TotalPageFaults = update.TotalPageFaults;
+            this.PagedPoolUsage = update.PagedPool;
+            this.NonPagedPoolUsage = update.NonPagedPool;
+            this.PrivatePageCount = update.PrivatePageCount;
+            this.PagefileUsage = update.PagefileUsage;
+            this.TotalNetworkSend = update.TotalNetworkSend;
+            this.TotalNetworkRecv = update.TotalNetworkRecv;
+        }
+
         public System.Collections.Generic.List<NativeProcesses.Core.Models.ProcessModuleInfo> Modules { get; private set; }
         public bool AreModulesLoadingOrLoaded { get; private set; }
 

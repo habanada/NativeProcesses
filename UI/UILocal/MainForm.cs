@@ -21,9 +21,11 @@ namespace ProcessDemo
         private BindingList<ProcessInfoViewModel> _allProcessItems;
         private ContextMenuStrip _menu;
         private ContextMenuStrip _menuThread;
-        private bool isInitialLoad = true;
-        private List<ProcessInfoViewModel> initialLoadBatch = new List<ProcessInfoViewModel>();
+        //private bool isInitialLoad = true;
+        //private List<ProcessInfoViewModel> initialLoadBatch = new List<ProcessInfoViewModel>();
         private IEngineLogger _logger;
+        private ProcessMonitorEngine _monitorEngine;
+
         private Button btnNetwork;
 
         public MainForm()
@@ -557,6 +559,10 @@ namespace ProcessDemo
             {
                 gridThreads.DataSource = null;
             }
+            if (p != null)
+            {
+                _monitorEngine.Subscribe(p.Pid, ProcessMetric.CpuUsage);
+            }
         }
 
         private void SetupMenu()
@@ -594,27 +600,27 @@ namespace ProcessDemo
             gridThreads.ContextMenuStrip = _menuThread;
         }
 
-        private void InitialLoadTimer_Tick(object sender, EventArgs e)
-        {
-            (sender as Timer).Stop();
-            try
-            {
-                grid.SuspendLayout();
-                foreach (var item in initialLoadBatch)
-                {
-                    _allProcessItems.Add(item);
-                }
+        //private void InitialLoadTimer_Tick(object sender, EventArgs e)
+        //{
+        //    (sender as Timer).Stop();
+        //    try
+        //    {
+        //        grid.SuspendLayout();
+        //        foreach (var item in initialLoadBatch)
+        //        {
+        //            _allProcessItems.Add(item);
+        //        }
 
-                _allProcessItems.RaiseListChangedEvents = true;
-                _allProcessItems.ResetBindings();
-            }
-            finally
-            {
-                grid.ResumeLayout();
-                initialLoadBatch = null;
-                isInitialLoad = false;
-            }
-        }
+        //        _allProcessItems.RaiseListChangedEvents = true;
+        //        _allProcessItems.ResetBindings();
+        //    }
+        //    finally
+        //    {
+        //        grid.ResumeLayout();
+        //        initialLoadBatch = null;
+        //        isInitialLoad = false;
+        //    }
+        //}
         private async Task LoadModulesForProcess(ProcessInfoViewModel p)
         {
             p.SetModules(new List<NativeProcesses.Core.Models.ProcessModuleInfo>());
@@ -834,11 +840,17 @@ namespace ProcessDemo
         }
         private void LoadProcesses()
         {
-            var provider = new PollingProcessProvider(TimeSpan.FromSeconds(3));
+            // Schritt 1: Provider auf Hybrid umstellen (Polling für CPU/Mem, ETW für I/O, Start/Stop)
+            var provider = new HybridProcessProvider(
+                new PollingProcessProvider(TimeSpan.FromSeconds(1)), // Liefert CPU/Speicher
+                new EtwProcessProvider() // Liefert Echtzeit-Events (Start/Stop, I/O, Netzwerk, PageFaults)
+            );
+
+            // Schritt 2: Logger instanziieren (wie im Original)
             _logger = new ConsoleLogger(richTextBox1);
 
+            // Schritt 3: DetailOptions (wie im Original)
             var detailOptions = new ProcessDetailOptions
-
             {
                 LoadSignatureInfo = true,
                 LoadMitigationInfo = true,
@@ -850,24 +862,27 @@ namespace ProcessDemo
                 LoadHandles = false
             };
 
+            // Schritt 4: ProcessService instanziieren (wie im Original)
             _service = new ProcessService(provider, _logger, detailOptions);
 
+            // Schritt 5: ProcessMonitorEngine instanziieren (NEU, aus Schritt 3.3)
+            _monitorEngine = new ProcessMonitorEngine(_service, _logger);
+            _monitorEngine.MetricChanged += MonitorEngine_MetricChanged;
+            _monitorEngine.Start();
+
+            // Schritt 6: UI-Binding (Bereinigt von 'isInitialLoad'-Bug, aus Schritt 5.5)
             _allProcessItems = new BindingList<ProcessInfoViewModel>();
             _allProcessItems.ListChanged += Binding_ListChanged;
-
-            _allProcessItems.RaiseListChangedEvents = false;
             grid.DataSource = _allProcessItems;
 
+            // Schritt 7: Alle Events abonnieren (Volatile-Event NEU, aus Schritt 5.4)
             _service.ProcessAdded += Service_ProcessAdded;
-            _service.ProcessRemoved += Service_ProcessRemoved;
-            _service.ProcessUpdated += Service_ProcessUpdated;
+           _service.ProcessRemoved += Service_ProcessRemoved;
+            _service.ProcessUpdated += Service_ProcessUpdated; // Für statische Daten (ExePath, Signer...)
+            _service.ProcessVolatileUpdated += Service_ProcessVolatileUpdated; // Für CPU, RAM, I/O...
 
+            // Schritt 8: Service starten (Veraltete Timer-Logik entfernt, aus Schritt 5.5)
             _service.Start();
-
-            Timer initialLoadTimer = new Timer();
-            initialLoadTimer.Interval = 1000;
-            initialLoadTimer.Tick += InitialLoadTimer_Tick;
-            initialLoadTimer.Start();
         }
         private void EnableGridDoubleBuffering(DataGridView dgv)
         {
@@ -911,34 +926,54 @@ namespace ProcessDemo
             }
             Grid_SelectionChanged(this, EventArgs.Empty);
         }
-
         private void Service_ProcessAdded(FullProcessInfo info)
         {
-            var newItem = new ProcessInfoViewModel(info);
-
-            if (isInitialLoad)
-            {
-                if (initialLoadBatch != null)
-                {
-                    lock (initialLoadBatch)
-                    {
-                        initialLoadBatch.Add(newItem);
-                    }
-                }
-                return;
-            }
-
             if (InvokeRequired)
             {
                 BeginInvoke(new Action(() => Service_ProcessAdded(info)));
                 return;
             }
 
-            if (!_allProcessItems.Any(p => p.Pid == newItem.Pid))
+            try
             {
-                _allProcessItems.Add(newItem);
+                if (!_allProcessItems.Any(p => p.Pid == info.Pid))
+                {
+                    var newItem = new ProcessInfoViewModel(info);
+                    _allProcessItems.Add(newItem);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Debug, "Service_ProcessAdded failed.", ex);
             }
         }
+        //private void Service_ProcessAdded(FullProcessInfo info)
+        //{
+        //    var newItem = new ProcessInfoViewModel(info);
+
+        //    if (isInitialLoad)
+        //    {
+        //        if (initialLoadBatch != null)
+        //        {
+        //            lock (initialLoadBatch)
+        //            {
+        //                initialLoadBatch.Add(newItem);
+        //            }
+        //        }
+        //        return;
+        //    }
+
+        //    if (InvokeRequired)
+        //    {
+        //        BeginInvoke(new Action(() => Service_ProcessAdded(info)));
+        //        return;
+        //    }
+
+        //    if (!_allProcessItems.Any(p => p.Pid == newItem.Pid))
+        //    {
+        //        _allProcessItems.Add(newItem);
+        //    }
+        //}
 
         private void Service_ProcessRemoved(int pid)
         {
@@ -957,10 +992,10 @@ namespace ProcessDemo
 
         private void Service_ProcessUpdated(FullProcessInfo info)
         {
-            if (isInitialLoad)
-            {
-                return;
-            }
+            //if (isInitialLoad)
+            //{
+            //    return;
+            //}
 
             if (InvokeRequired)
             {
@@ -974,7 +1009,20 @@ namespace ProcessDemo
                 itemToUpdate.ApplyUpdate(info);
             }
         }
+        private void Service_ProcessVolatileUpdated(ProcessVolatileUpdate update)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => Service_ProcessVolatileUpdated(update)));
+                return;
+            }
 
+            var itemToUpdate = _allProcessItems.FirstOrDefault(p => p.Pid == update.Pid);
+            if (itemToUpdate != null)
+            {
+                itemToUpdate.ApplyVolatileUpdate(update);
+            }
+        }
         private ProcessInfoViewModel SelectedProcess
         {
             get
@@ -1064,15 +1112,35 @@ namespace ProcessDemo
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            _monitorEngine?.Stop();
             _service?.Stop();
             _service?.Dispose();
             base.OnFormClosing(e);
+
         }
 
         private void MainForm_Shown(object sender, EventArgs e)
         {
             DarkTitleBarHelper.Apply(this);
             Application.DoEvents();
+        }
+        private void MonitorEngine_MetricChanged(object sender, ProcessMetricChangeEventArgs e)
+        {
+            if (richTextBox1.InvokeRequired)
+            {
+                richTextBox1.BeginInvoke(new Action(() => MonitorEngine_MetricChanged(sender, e)));
+                return;
+            }
+
+            try
+            {
+                string text = $"[MonitorEngine] PID {e.Pid} - {e.Metric}: {e.NewValue}\n";
+                richTextBox1.AppendText(text);
+                richTextBox1.ScrollToCaret();
+            }
+            catch (Exception)
+            {
+            }
         }
     }
 

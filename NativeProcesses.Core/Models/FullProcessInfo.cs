@@ -91,6 +91,19 @@ namespace NativeProcesses.Core
             get { lock (_updateLock) { return _totalPageFaults; } }
             set { lock (_updateLock) { _totalPageFaults = value; } }
         }
+        private long _totalNetworkSend;
+        private long _totalNetworkRecv;
+        public long TotalNetworkSend
+        {
+            get { lock (_updateLock) { return _totalNetworkSend; } }
+            set { lock (_updateLock) { _totalNetworkSend = value; } }
+        }
+
+        public long TotalNetworkRecv
+        {
+            get { lock (_updateLock) { return _totalNetworkRecv; } }
+            set { lock (_updateLock) { _totalNetworkRecv = value; } }
+        }
 
         private long _pagedPoolUsage;
         public long PagedPoolUsage
@@ -311,7 +324,26 @@ namespace NativeProcesses.Core
 
             lock (_threadListLock)
             {
-                this.Threads = threadInfos;
+                var sourceThreadIds = new HashSet<int>(threadInfos.Select(t => t.ThreadId));
+                var threadsToRemove = _threadsList.Where(t => !sourceThreadIds.Contains(t.ThreadId)).ToList();
+
+                foreach (var oldThread in threadsToRemove)
+                {
+                    _threadsList.Remove(oldThread);
+                }
+
+                foreach (var sourceThread in threadInfos)
+                {
+                    var existingThread = _threadsList.FirstOrDefault(t => t.ThreadId == sourceThread.ThreadId);
+                    if (existingThread != null)
+                    {
+                        existingThread.ApplyUpdate(sourceThread);
+                    }
+                    else
+                    {
+                        _threadsList.Add(sourceThread);
+                    }
+                }
             }
         }
 

@@ -91,7 +91,19 @@ namespace ProcessDemo
             get { return _totalWriteOps; }
             set { _totalWriteOps = value; Notify(); }
         }
+        private long _totalNetworkSend;
+        public long TotalNetworkSend
+        {
+            get { return _totalNetworkSend; }
+            set { _totalNetworkSend = value; Notify(); }
+        }
 
+        private long _totalNetworkRecv;
+        public long TotalNetworkRecv
+        {
+            get { return _totalNetworkRecv; }
+            set { _totalNetworkRecv = value; Notify(); }
+        }
         private long _totalPageFaults;
         public long TotalPageFaults
         {
@@ -332,7 +344,9 @@ namespace ProcessDemo
                 source.PagedPoolUsage,
                 source.NonPagedPoolUsage,
                 source.PrivatePageCount,
-                source.PagefileUsage
+                source.PagefileUsage,
+                source.TotalNetworkSend,
+                source.TotalNetworkRecv
             );
 
             this.DpiAwareness = source.DpiAwareness;
@@ -412,11 +426,14 @@ namespace ProcessDemo
                 update.PagedPool,
                 update.NonPagedPool,
                 update.PrivatePageCount,
-                update.PagefileUsage
+                update.PagefileUsage,
+                update.TotalNetworkSend,
+                update.TotalNetworkRecv
             );
         }
 
-        private void ApplyVolatileValues(double cpu, long workingSet, uint threads, int priority, long reads, long writes, long readOps, long writeOps, long pageFaults, long pagedPool, long nonPagedPool, long privatePages, long pagefile)
+        private void ApplyVolatileValues(double cpu, long workingSet, uint threads, int priority, long reads, long writes, long readOps, long writeOps, long pageFaults, 
+            long pagedPool, long nonPagedPool, long privatePages, long pagefile, long netSend, long netRecv)
         {
             this.CpuUsagePercent = cpu;
             this.WorkingSetSize = workingSet;
@@ -431,6 +448,8 @@ namespace ProcessDemo
             this.NonPagedPoolUsage = nonPagedPool;
             this.PrivatePageCount = privatePages;
             this.PagefileUsage = pagefile;
+            this.TotalNetworkSend = netSend;
+            this.TotalNetworkRecv = netRecv;
         }
     }
 }

@@ -207,6 +207,10 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Engine\ProcessMetric.cs" />
+    <Compile Include="Engine\ProcessMetricChangeEventArgs.cs" />
+    <Compile Include="Engine\ProcessMonitorEngine.cs" />
+    <Compile Include="Engine\ProcessVolatileUpdate.cs" />
     <Compile Include="Inspection\DotNetInspector.cs" />
     <Compile Include="Models\DotNetAppDomainInfo.cs" />
     <Compile Include="Models\DotNetExceptionInfo.cs" />
@@ -248,6 +252,9 @@
     <Compile Include="Providers\PollingProcessProvider.cs" />
     <Compile Include="Native\ProcessAccessFlags.cs" />
     <Compile Include="Models\ProcessDetailOptions.cs" />
+    <Compile Include="Tracing\AggregatedIoUsage.cs" />
+    <Compile Include="Tracing\EtwAggregator.cs" />
+    <Compile Include="Tracing\EtwKernelSession.cs" />
     <Content Include="ProcessInfoViewModel.TXT" />
     <Compile Include="Models\ProcessIoCounters.cs" />
     <Compile Include="Demo\ProcessItem.cs" />
