@@ -16,6 +16,7 @@ using NativeProcesses.Core.Native;
 using System.Linq;
 using NativeProcesses.Core.Inspection;
 using Microsoft.Diagnostics.Tracing;
+using NativeProcesses.Core.Inspection;
 
 namespace NativeProcesses.Core.Providers
 {
@@ -29,6 +30,7 @@ namespace NativeProcesses.Core.Providers
         private int _intervalMs = 1000;
         private readonly ConcurrentDictionary<int, IoUsageData> _usageData = new ConcurrentDictionary<int, IoUsageData>();
         public event Action<ThreatIntelInfo> ThreatDetected;
+        public event Action<NativeHeapAllocationInfo> HeapEventDetected;
 
         private class IoUsageData
         {
@@ -101,9 +103,10 @@ namespace NativeProcesses.Core.Providers
                     using (_session = new TraceEventSession(sessionName))
                     {
                         var keywords = KernelTraceEventParser.Keywords.Process |
-                                       KernelTraceEventParser.Keywords.DiskIO |
-                                       KernelTraceEventParser.Keywords.NetworkTCPIP |
-                                       KernelTraceEventParser.Keywords.MemoryHardFaults;
+                                                               KernelTraceEventParser.Keywords.DiskIO |
+                                                               KernelTraceEventParser.Keywords.NetworkTCPIP |
+                                                               KernelTraceEventParser.Keywords.MemoryHardFaults |
+                                                               KernelTraceEventParser.Keywords.VirtualAlloc;
 
                         _session.EnableKernelProvider(keywords);
                         _session.EnableProvider("Microsoft-Windows-Threat-Intelligence");
@@ -117,6 +120,8 @@ namespace NativeProcesses.Core.Providers
                         _session.Source.Kernel.TcpIpRecv += OnNetworkReceive;
                         _session.Source.Kernel.MemoryHardFault += OnMemoryHardFault;
 
+                        _session.Source.Kernel.VirtualMemAlloc += OnVirtualAlloc;
+                        _session.Source.Kernel.VirtualMemFree += OnVirtualFree; // Verweist jetzt auf die korrigierte Methode
                         _flushTimer = new Timer(AggregateAndFlush, null, _intervalMs, _intervalMs);
 
                         _session.Source.Process();
@@ -288,6 +293,56 @@ namespace NativeProcesses.Core.Providers
                 _logger?.Log(LogLevel.Debug, $"EtwProcessProvider.OnDynamicThreatEvent failed for {data.EventName}", ex);
             }
         }
+        private void OnVirtualAlloc(VirtualAllocTraceData data)
+        {
+            if (HeapEventDetected == null)
+                return;
+
+            try
+            {
+                var info = new NativeHeapAllocationInfo
+                {
+                    ProcessId = data.ProcessID,
+                    ThreadId = data.ThreadID,
+                    TimeStamp = data.TimeStamp,
+                    EventName = "VirtualAlloc",
+                    BaseAddress = (IntPtr)data.BaseAddr,
+                    Size = data.Length,
+                    Type = "N/A",
+                    Protection = data.Flags.ToString()
+                };
+                HeapEventDetected?.Invoke(info);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Debug, $"EtwProcessProvider.OnVirtualAlloc failed for PID {data.ProcessID}", ex);
+            }
+        }
+        private void OnVirtualFree(VirtualAllocTraceData data)
+        {
+            if (HeapEventDetected == null)
+                return;
+
+            try
+            {
+                var info = new NativeHeapAllocationInfo
+                {
+                    ProcessId = data.ProcessID,
+                    ThreadId = data.ThreadID,
+                    TimeStamp = data.TimeStamp,
+                    EventName = "VirtualFree",
+                    BaseAddress = (IntPtr)data.BaseAddr,
+                    Size = data.Length,
+                    Type = "N/A (Free)",
+                    Protection = data.Flags.ToString()
+                };
+                HeapEventDetected?.Invoke(info);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Debug, $"EtwProcessProvider.OnVirtualFree failed for PID {data.ProcessID}", ex);
+            }
+        }
         public void Stop()
         {
             try
@@ -315,6 +370,8 @@ namespace NativeProcesses.Core.Providers
                     _session.Source.Kernel.TcpIpRecv -= OnNetworkReceive;
                     _session.Source.Kernel.MemoryHardFault -= OnMemoryHardFault;
                     _session.Source.Dynamic.All -= OnDynamicThreatEvent;
+                    _session.Source.Kernel.VirtualMemAlloc -= OnVirtualAlloc;
+                    _session.Source.Kernel.VirtualMemFree -= OnVirtualFree;
                 }
                 catch (Exception ex)
                 {

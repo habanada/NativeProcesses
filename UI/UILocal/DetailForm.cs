@@ -95,14 +95,13 @@ namespace processlist
         }
         private void SetupContextMenu(IEnumerable data)
         {
-            if (_pid == -1)
-                return;
-
-            var first = data.Cast<object>().FirstOrDefault();
-            if (first == null)
-                return;
-
-            _itemType = first.GetType();
+            if (_pid == -1 && _itemType == null)
+            {
+                var first = data.Cast<object>().FirstOrDefault();
+                if (first == null)
+                    return;
+                _itemType = first.GetType();
+            }
 
             if (_itemType == typeof(NativeProcesses.Core.Models.DotNetExceptionInfo) ||
                 _itemType == typeof(NativeProcesses.Core.Models.DotNetFinalizerInfo) ||
@@ -111,6 +110,86 @@ namespace processlist
                 ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Items.Add("Find GC Root Path", null, FindGcRoot_Click);
                 gridDetails.ContextMenuStrip = menu;
+            }
+
+            // --- NEU: Menü für Suspicious Memory Dumps ---
+            if (_itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousMemoryRegionInfo) ||
+                _itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousThreadInfo)||
+                _itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo))
+            {
+                ContextMenuStrip menu = new ContextMenuStrip();
+                menu.Items.Add("Dump this memory region...", null, DumpSuspiciousMemory_Click);
+                gridDetails.ContextMenuStrip = menu;
+            }
+        }
+        private async void DumpSuspiciousMemory_Click(object sender, EventArgs e)
+        {
+            if (gridDetails.SelectedRows.Count == 0 || _pid == -1 || _itemType == null)
+                return;
+
+            dynamic item = gridDetails.SelectedRows[0].DataBoundItem;
+            IntPtr baseAddress = IntPtr.Zero;
+            long regionSize = 0;
+
+            try
+            {
+                if (_itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousMemoryRegionInfo))
+                {
+                    baseAddress = item.BaseAddress;
+                    regionSize = item.RegionSize;
+                }
+                else if (_itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo)) // NEU
+                {
+                    baseAddress = item.BaseAddress;
+                    regionSize = item.RegionSize;
+                }
+                else if (_itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousThreadInfo))
+                {
+                    baseAddress = item.StartAddress;
+                    // ...
+                    var regionInfo = (NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousThreadInfo)item;
+                    MessageBox.Show(this, $"Dumping 4KB from thread start address: {baseAddress.ToString("X")}\n(Region: {regionInfo.RegionState} / {regionInfo.RegionProtection})", "Dumping Thread Memory", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+
+                if (baseAddress == IntPtr.Zero || regionSize == 0)
+                {
+                    MessageBox.Show(this, "Could not determine valid memory address or size.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Error reading item properties: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            using (SaveFileDialog sfd = new SaveFileDialog())
+            {
+                sfd.FileName = $"PID_{_pid}_DUMP_at_{baseAddress.ToString("X")}.bin";
+                sfd.Filter = "Binary Dump (*.bin)|*.bin|All Files (*.*)|*.*";
+                if (sfd.ShowDialog(this) == DialogResult.OK)
+                {
+                    this.Cursor = Cursors.WaitCursor;
+                    try
+                    {
+                        bool success = await NativeProcesses.Core.Native.ProcessManager.DumpProcessMemoryRegionAsync(_pid, baseAddress, regionSize, sfd.FileName, null);
+                        this.Cursor = Cursors.Default;
+
+                        if (success)
+                        {
+                            MessageBox.Show(this, $"Memory successfully dumped to:\n{sfd.FileName}", "Dump Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        else
+                        {
+                            MessageBox.Show(this, "Failed to dump memory. Check logs or permissions.", "Dump Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        this.Cursor = Cursors.Default;
+                        MessageBox.Show(this, $"Failed to dump memory: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
             }
         }
         private void EnableGridDoubleBuffering(DataGridView dgv)

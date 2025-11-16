@@ -1,8 +1,10 @@
-﻿using System;
-using System.Runtime.InteropServices;
-using NativeProcesses.Core.Engine;
+﻿using NativeProcesses.Core.Engine;
+using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace NativeProcesses.Core.Inspection
 {
@@ -59,20 +61,25 @@ namespace NativeProcesses.Core.Inspection
         // Fügen Sie diese using-Anweisung ganz oben in der Datei hinzu:
 
         // Fügen Sie diese Struktur hinzu, um die Ergebnisse zu speichern:
-        public struct IatHookInfo
+        public class IatHookInfo
         {
             public string ModuleName;
             public string FunctionName;
             public IntPtr ExpectedAddress;
             public IntPtr ActualAddress;
+            public string TargetModule; 
         }
-        public struct InlineHookInfo
+        public class InlineHookInfo
         {
             public string ModuleName;
             public string SectionName;
             public long Offset;
             public byte OriginalByte;
             public byte PatchedByte;
+            public string HookType;
+            public int HookSize;
+            public IntPtr TargetAddress; 
+            public string TargetModule; 
         }
         public struct SuspiciousThreadInfo
         {
@@ -392,7 +399,7 @@ namespace NativeProcesses.Core.Inspection
             return sections;
         }
 
-        private PeStructs.IMAGE_SECTION_HEADER[] GetPeHeadersFromMemory(Native.ManagedProcess process, IntPtr moduleBase, out PeStructs.IMAGE_DOS_HEADER dosHeader, out PeStructs.IMAGE_FILE_HEADER fileHeader, out ushort magic)
+        private PeStructs.IMAGE_SECTION_HEADER[] GetPeHeadersFromMemory(Native.ManagedProcess process, IntPtr moduleBase, out PeStructs.IMAGE_DOS_HEADER dosHeader, out PeStructs.IMAGE_FILE_HEADER fileHeader, out ushort magic, out PeStructs.IMAGE_DATA_DIRECTORY relocDir)
         {
             byte[] buffer = process.ReadMemory(moduleBase, Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER)));
             dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(buffer);
@@ -422,7 +429,79 @@ namespace NativeProcesses.Core.Inspection
                 Array.Copy(buffer, i * sectionHeaderSize, sectionBytes, 0, sectionHeaderSize);
                 sections[i] = ByteArrayToStructure<PeStructs.IMAGE_SECTION_HEADER>(sectionBytes);
             }
+            // ... (Am Ende der GetPeHeadersFromMemory-Methode)
+
+            relocDir = new PeStructs.IMAGE_DATA_DIRECTORY();
+            if (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+            {
+                byte[] optHeaderBytes = process.ReadMemory(optionalHeaderAddr, Marshal.SizeOf<PeStructs.IMAGE_OPTIONAL_HEADER64>());
+                var optHeader = ByteArrayToStructure<PeStructs.IMAGE_OPTIONAL_HEADER64>(optHeaderBytes);
+                relocDir = optHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC];
+            }
+            else
+            {
+                byte[] optHeaderBytes = process.ReadMemory(optionalHeaderAddr, Marshal.SizeOf<PeStructs.IMAGE_OPTIONAL_HEADER32>());
+                var optHeader = ByteArrayToStructure<PeStructs.IMAGE_OPTIONAL_HEADER32>(optHeaderBytes);
+                relocDir = optHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC];
+            }
+
             return sections;
+        }
+        private HashSet<uint> ParseRelocations(Native.ManagedProcess process, IntPtr moduleBase, PeStructs.IMAGE_DATA_DIRECTORY relocDir, bool isWow64)
+        {
+            var relocOffsets = new HashSet<uint>();
+            if (relocDir.VirtualAddress == 0 || relocDir.Size == 0)
+            {
+                return relocOffsets;
+            }
+
+            try
+            {
+                IntPtr currentRelocAddr = IntPtr.Add(moduleBase, (int)relocDir.VirtualAddress);
+                IntPtr relocEndAddr = IntPtr.Add(currentRelocAddr, (int)relocDir.Size);
+                int relocBlockSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_BASE_RELOCATION));
+
+                while (currentRelocAddr.ToInt64() < relocEndAddr.ToInt64())
+                {
+                    byte[] blockHeaderBytes = process.ReadMemory(currentRelocAddr, relocBlockSize);
+                    var relocBlock = ByteArrayToStructure<PeStructs.IMAGE_BASE_RELOCATION>(blockHeaderBytes);
+
+                    if (relocBlock.VirtualAddress == 0 || relocBlock.SizeOfBlock == 0)
+                        break;
+
+                    int entryCount = (int)(relocBlock.SizeOfBlock - relocBlockSize) / sizeof(ushort);
+                    IntPtr entryAddr = IntPtr.Add(currentRelocAddr, relocBlockSize);
+                    byte[] entries = process.ReadMemory(entryAddr, (int)(entryCount * sizeof(ushort)));
+
+                    for (int i = 0; i < entryCount; i++)
+                    {
+                        ushort entry = BitConverter.ToUInt16(entries, i * sizeof(ushort));
+                        ushort type = (ushort)(entry >> 12);
+                        uint offset = (uint)(entry & 0x0FFF);
+
+                        // Wir interessieren uns nur für Relocations, die auf 32-bit/64-bit Zeiger abzielen
+                        if (type == PeStructs.IMAGE_REL_BASED_DIR64 || type == PeStructs.IMAGE_REL_BASED_HIGHLOW)
+                        {
+                            uint relocRva = relocBlock.VirtualAddress + offset;
+                            relocOffsets.Add(relocRva);
+
+                            // Ein Zeiger ist 4 (HIGHLOW) oder 8 (DIR64) Bytes groß.
+                            // Wir müssen alle Bytes dieses Zeigers zur Skip-Liste hinzufügen.
+                            int ptrSize = (type == PeStructs.IMAGE_REL_BASED_DIR64) ? 8 : 4;
+                            for (int p = 1; p < ptrSize; p++)
+                            {
+                                relocOffsets.Add(relocRva + (uint)p);
+                            }
+                        }
+                    }
+                    currentRelocAddr = IntPtr.Add(currentRelocAddr, (int)relocBlock.SizeOfBlock);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Error, "SecurityInspector.ParseRelocations failed.", ex);
+            }
+            return relocOffsets;
         }
 
         private PeStructs.IMAGE_SECTION_HEADER FindSection(PeStructs.IMAGE_SECTION_HEADER[] sections, string sectionName)
@@ -436,7 +515,7 @@ namespace NativeProcesses.Core.Inspection
             }
             throw new Exception($"Section '{sectionName}' not found.");
         }
-        public List<IatHookInfo> CheckIatHooks(Native.ManagedProcess process, IntPtr moduleToScanBase, string moduleToScanName, IntPtr ntdllBase, List<NativeProcesses.Core.Models.ProcessModuleInfo> allModules)
+        public List<IatHookInfo> CheckIatHooks(Native.ManagedProcess process, IntPtr moduleToScanBase, string moduleToScanName, IntPtr ntdllBase, List<NativeProcesses.Core.Models.ProcessModuleInfo> allModules, List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
         {
             var results = new List<IatHookInfo>();
             bool isWow64 = process.GetIsWow64();
@@ -517,13 +596,15 @@ namespace NativeProcesses.Core.Inspection
                         if (actualAddressInIat != expectedAddress)
                         {
                             // HOOK GEFUNDEN!
-                            // Die IAT (actualAddress) zeigt NICHT auf die EAT (expectedAddress).
+                            // Finde heraus, WOHIN die IAT umgeleitet wird.
+                            string targetModule = AttributeAddress(actualAddressInIat, allModules, regions);
                             results.Add(new IatHookInfo
                             {
                                 ModuleName = moduleToScanName,
                                 FunctionName = functionName,
                                 ExpectedAddress = expectedAddress,
-                                ActualAddress = actualAddressInIat
+                                ActualAddress = actualAddressInIat,
+                                TargetModule = targetModule 
                             });
                         }
                     }
@@ -535,31 +616,250 @@ namespace NativeProcesses.Core.Inspection
             }
             return results;
         }
-
-        public List<InlineHookInfo> CheckForInlineHooks(Native.ManagedProcess process, IntPtr moduleBase, string modulePath)
+        public List<InlineHookInfo> CheckForInlineHooks(Native.ManagedProcess process,
+                                                                IntPtr moduleBase,
+                                                                string modulePath,
+                                                                List<NativeProcesses.Core.Models.ProcessModuleInfo> modules,
+                                                                List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
         {
             var results = new List<InlineHookInfo>();
+            bool firstHookLogged = false;
             try
             {
+                var memSections = GetPeHeadersFromMemory(process, moduleBase, out _, out _, out ushort magic, out PeStructs.IMAGE_DATA_DIRECTORY memRelocDir);
+                bool isWow64 = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR32_MAGIC);
+
+                HashSet<uint> relocOffsets = ParseRelocations(process, moduleBase, memRelocDir, isWow64);
+
                 var fileSections = GetPeHeadersFromFile(modulePath, out _, out _, out _);
-                var memSections = GetPeHeadersFromMemory(process, moduleBase, out _, out _, out _);
 
                 var fileTextSection = FindSection(fileSections, ".text");
                 var memTextSection = FindSection(memSections, ".text");
 
                 if (fileTextSection.SizeOfRawData == 0 || memTextSection.VirtualSize == 0)
                 {
-                    _logger?.Log(LogLevel.Debug, $"SecurityInspector: {modulePath} .text size is zero.", null);
                     return results;
                 }
 
                 uint sizeToCompare = Math.Min(fileTextSection.SizeOfRawData, memTextSection.VirtualSize);
-
                 byte[] fileBytes = ReadBytesFromFile(modulePath, fileTextSection.PointerToRawData, sizeToCompare);
                 byte[] memBytes = process.ReadMemory(IntPtr.Add(moduleBase, (int)memTextSection.VirtualAddress), (int)sizeToCompare);
 
                 for (int i = 0; i < sizeToCompare; i++)
                 {
+                    uint currentRva = memTextSection.VirtualAddress + (uint)i;
+
+                    if (relocOffsets.Contains(currentRva))
+                    {
+                        continue;
+                    }
+
+                    if (fileBytes[i] != memBytes[i])
+                    {
+                        // HOOK GEFUNDEN! Jetzt analysieren
+                        var hookInfo = AnalyzeHook(process, memBytes, i, IntPtr.Add(moduleBase, (int)currentRva), isWow64);
+                        if (hookInfo != null)
+                        {
+                            hookInfo.ModuleName = System.IO.Path.GetFileName(modulePath);
+                            hookInfo.SectionName = ".text";
+                            hookInfo.Offset = i;
+
+                            hookInfo.TargetModule = AttributeAddress(hookInfo.TargetAddress, modules, regions);
+
+                            results.Add(hookInfo);
+
+                            if (!firstHookLogged)
+                            {
+                                _logger?.Log(LogLevel.Warning, $"SecurityInspector: HOOK DETECTED! Type: {hookInfo.HookType} in {modulePath} at .text + 0x{i.ToString("X")}. Target: {hookInfo.TargetModule}", null);
+                                firstHookLogged = true;
+                            }
+
+                            // Zum nächsten Byte *nach* dem Hook springen
+                            i += (hookInfo.HookSize - 1);
+                        }
+                    }
+                }
+
+                if (results.Count > 1 && firstHookLogged)
+                {
+                    _logger?.Log(LogLevel.Warning, $"SecurityInspector: Full scan complete. Found {results.Count} total hooks in {modulePath} .text section.", null);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Error, $"SecurityInspector.CheckForInlineHooks failed for {modulePath}", ex);
+            }
+            return results;
+        }
+        private InlineHookInfo AnalyzeHook(Native.ManagedProcess process, byte[] memBytes, int offset, IntPtr patchAddress, bool isWow64)
+        {
+            if (offset >= memBytes.Length)
+            {
+                return null;
+            }
+
+            byte op = memBytes[offset];
+
+            try
+            {
+                // --- JMP rel32 (Relativer Sprung) ---
+                if (op == 0xE9 && offset + 4 < memBytes.Length)
+                {
+                    int relativeOffset = BitConverter.ToInt32(memBytes, offset + 1);
+                    IntPtr targetAddress = IntPtr.Add(patchAddress, 5 + relativeOffset);
+                    return new InlineHookInfo
+                    {
+                        HookType = "JMP_REL32",
+                        HookSize = 5,
+                        TargetAddress = targetAddress
+                    };
+                }
+
+                // --- PUSH addr / RET (Klassischer 32-Bit-Hook) ---
+                if (isWow64 && op == 0x68 && offset + 5 < memBytes.Length && memBytes[offset + 5] == 0xC3)
+                {
+                    uint targetAddress32 = BitConverter.ToUInt32(memBytes, offset + 1);
+                    return new InlineHookInfo
+                    {
+                        HookType = "PUSH_RET_32",
+                        HookSize = 6,
+                        TargetAddress = (IntPtr)targetAddress32
+                    };
+                }
+
+                // --- JMP [addr] (Absoluter Sprung / 64-Bit RIP-Relativ) ---
+                if (op == 0xFF && offset + 5 < memBytes.Length && memBytes[offset + 1] == 0x25)
+                {
+                    int relativeOffset = BitConverter.ToInt32(memBytes, offset + 2);
+                    IntPtr pointerAddress;
+                    if (isWow64)
+                    {
+                        pointerAddress = (IntPtr)relativeOffset;
+                    }
+                    else
+                    {
+                        pointerAddress = IntPtr.Add(patchAddress, 6 + relativeOffset);
+                    }
+
+                    IntPtr targetAddress = ReadIntPtr(process, pointerAddress, isWow64);
+
+                    return new InlineHookInfo
+                    {
+                        HookType = isWow64 ? "JMP_ABS_32" : "JMP_RIP_REL_64",
+                        HookSize = 6,
+                        TargetAddress = targetAddress
+                    };
+                }
+
+                // --- MOV RAX, [addr] / JMP RAX (64-Bit-Trampolin) ---
+                if (!isWow64 && op == 0x48 && offset + 11 < memBytes.Length && memBytes[offset + 1] == 0xB8)
+                {
+                    if (memBytes[offset + 10] == 0xFF && memBytes[offset + 11] == 0xE0)
+                    {
+                        long targetAddress64 = BitConverter.ToInt64(memBytes, offset + 2);
+                        return new InlineHookInfo
+                        {
+                            HookType = "MOV_RAX_JMP_RAX_64",
+                            HookSize = 12,
+                            TargetAddress = (IntPtr)targetAddress64
+                        };
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Error, "SecurityInspector.AnalyzeHook failed", ex);
+                return null;
+            }
+
+            // Konnte nicht als bekannter Hook-Typ identifiziert werden
+            // Wir geben einen gültigen Typ zurück, damit wir ihn überspringen können
+            return new InlineHookInfo
+            {
+                HookType = "UNKNOWN_PATCH",
+                HookSize = 1,
+                TargetAddress = IntPtr.Zero
+            };
+        }
+        private string AttributeAddress(IntPtr targetAddress,
+                                        List<NativeProcesses.Core.Models.ProcessModuleInfo> modules,
+                                        List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
+        {
+            if (targetAddress == IntPtr.Zero)
+            {
+                return "N/A";
+            }
+
+            long target = targetAddress.ToInt64();
+
+            // 1. Landet es in einem geladenen Modul? (Legitim / EDR)
+            foreach (var mod in modules)
+            {
+                if (mod.DllBase == IntPtr.Zero || mod.SizeOfImage == 0) continue;
+                long start = mod.DllBase.ToInt64();
+                long end = start + mod.SizeOfImage;
+
+                if (target >= start && target < end)
+                {
+                    return mod.BaseDllName;
+                }
+            }
+
+            // 2. Landet es in privatem Speicher? (Shellcode!)
+            foreach (var region in regions)
+            {
+                long regionStart = region.BaseAddress.ToInt64();
+                long regionEnd = regionStart + region.RegionSize;
+
+                if (target >= regionStart && target < regionEnd)
+                {
+                    return $"PRIVATE_MEMORY ({region.Type} / {region.Protection})";
+                }
+            }
+
+            return "UNKNOWN_REGION";
+        }
+        public List<InlineHookInfo> CheckForInlineHooksFirstFoundBreak(Native.ManagedProcess process, IntPtr moduleBase, string modulePath)
+        {
+            var results = new List<InlineHookInfo>();
+            try
+            {
+                // 1. Hole Header und Relocation-Informationen aus dem Speicher
+                var memSections = GetPeHeadersFromMemory(process, moduleBase, out _, out _, out ushort magic, out PeStructs.IMAGE_DATA_DIRECTORY memRelocDir);
+                bool isWow64 = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR32_MAGIC);
+
+                // 2. Parse die Relocation-Liste aus dem Speicher
+                HashSet<uint> relocOffsets = ParseRelocations(process, moduleBase, memRelocDir, isWow64);
+
+                // 3. Hole Header aus der Datei
+                var fileSections = GetPeHeadersFromFile(modulePath, out _, out _, out _);
+
+                var fileTextSection = FindSection(fileSections, ".text");
+                var memTextSection = FindSection(memSections, ".text");
+
+                if (fileTextSection.SizeOfRawData == 0 || memTextSection.VirtualSize == 0)
+                {
+                    return results;
+                }
+
+                uint sizeToCompare = Math.Min(fileTextSection.SizeOfRawData, memTextSection.VirtualSize);
+
+                // 4. Lese beide .text-Sektionen 
+                byte[] fileBytes = ReadBytesFromFile(modulePath, fileTextSection.PointerToRawData, sizeToCompare);
+                byte[] memBytes = process.ReadMemory(IntPtr.Add(moduleBase, (int)memTextSection.VirtualAddress), (int)sizeToCompare);
+
+                // 5. Vergleiche Byte für Byte (MIT RELOCATION-CHECK)
+                for (int i = 0; i < sizeToCompare; i++)
+                {
+                    uint currentRva = memTextSection.VirtualAddress + (uint)i;
+
+                    // HIER IST DER NEUE SCHRITT:
+                    // Wenn diese Adresse vom Loader gepatcht wurde, überspringe den Vergleich.
+                    if (relocOffsets.Contains(currentRva))
+                    {
+                        continue;
+                    }
+
                     if (fileBytes[i] != memBytes[i])
                     {
                         results.Add(new InlineHookInfo
@@ -571,7 +871,6 @@ namespace NativeProcesses.Core.Inspection
                             PatchedByte = memBytes[i]
                         });
 
-                        // Wir melden nur den ersten Fund pro Sektion, um das Log nicht zu fluten
                         _logger?.Log(LogLevel.Warning, $"SecurityInspector: HOOK DETECTED! Mismatch in {modulePath} at .text + 0x{i.ToString("X")}.", null);
                         return results;
                     }
@@ -581,7 +880,7 @@ namespace NativeProcesses.Core.Inspection
             {
                 _logger?.Log(LogLevel.Error, $"SecurityInspector.CheckForInlineHooks failed for {modulePath}", ex);
             }
-            return results; // Keine Hooks gefunden
+            return results;
         }
         public List<SuspiciousThreadInfo> CheckForSuspiciousThreads(
             List<NativeProcesses.Core.ThreadInfo> threads,
@@ -680,6 +979,76 @@ namespace NativeProcesses.Core.Inspection
             }
             return results;
         }
+        public List<FoundPeHeaderInfo> CheckDataRegionsForPeHeaders(Native.ManagedProcess process, List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
+        {
+            var results = new List<FoundPeHeaderInfo>();
+
+            try
+            {
+                // Wir scannen NUR private, committete Regionen.
+                // MEM_IMAGE  (legitime DLLs) und MEM_MAPPED (Speicher-Dateien) werden ignoriert.
+                var privateRegions = regions
+                    .Where(r => r.State == "Commit" &&
+                                r.Type == "Private")
+                    .ToList();
+
+                foreach (var region in privateRegions)
+                {
+                    // Wir müssen nicht die ganze Region lesen (kann GB groß sein).
+                    // Ein PE-Header muss am Anfang (Offset 0) der Region liegen.
+                    // Wir lesen die ersten 4096 Bytes (4KB), das reicht für alle Header.
+                    int bytesToRead = (int)Math.Min(region.RegionSize, 4096);
+                    if (bytesToRead < 1024) // Weniger als 1KB ist unwahrscheinlich für ein PE
+                    {
+                        continue;
+                    }
+
+                    byte[] buffer;
+                    try
+                    {
+                        buffer = process.ReadMemory(region.BaseAddress, bytesToRead);
+                    }
+                    catch (Exception)
+                    {
+                        continue; // Lesefehler (z.B. Konkurrenzsituation), Region überspringen
+                    }
+
+                    // 1. Suche nach "MZ"-Signatur  am Anfang
+                    if (buffer[0] != 0x4D || buffer[1] != 0x5A) // 'M' 'Z'
+                    {
+                        continue;
+                    }
+
+                    // 2. Finde den "e_lfanew"  (Offset zum PE-Header)
+                    int e_lfanew = BitConverter.ToInt32(buffer, 0x3C);
+                    if (e_lfanew + 4 > buffer.Length)
+                    {
+                        continue; // PE-Header liegt außerhalb unseres gelesenen Puffers
+                    }
+
+                    // 3. Suche nach "PE\0\0"-Signatur 
+                    if (buffer[e_lfanew] == 0x50 && buffer[e_lfanew + 1] == 0x45 &&
+                        buffer[e_lfanew + 2] == 0x00 && buffer[e_lfanew + 3] == 0x00)
+                    {
+                        // FUND! Ein PE-Header liegt im privaten Speicher .
+                        results.Add(new FoundPeHeaderInfo
+                        {
+                            BaseAddress = region.BaseAddress,
+                            RegionSize = region.RegionSize,
+                            RegionType = region.Type,
+                            RegionProtection = region.Protection,
+                            Status = $"PE Header found at offset 0 (RW/R-Only Memory)"
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Error, "SecurityInspector.CheckDataRegionsForPeHeaders failed.", ex);
+            }
+            return results;
+        }
+
         private IntPtr ReadIntPtr(Native.ManagedProcess process, IntPtr address, bool isWow64)
         {
             int ptrSize = isWow64 ? 4 : 8;
@@ -732,11 +1101,12 @@ namespace NativeProcesses.Core.Inspection
         public List<SecurityInspector.InlineHookInfo> InlineHooks { get; internal set; }
         public List<SecurityInspector.SuspiciousThreadInfo> SuspiciousThreads { get; internal set; }
         public List<SecurityInspector.SuspiciousMemoryRegionInfo> SuspiciousMemoryRegions { get; internal set; }
+        public List<FoundPeHeaderInfo> FoundPeHeaders { get; internal set; } 
         public List<string> Errors { get; internal set; }
 
         public bool IsHooked
         {
-            get { return (IatHooks.Count > 0) || (InlineHooks.Count > 0); }
+            get { return (IatHooks.Count > 0) || (InlineHooks.Count > 0) || (SuspiciousThreads.Count > 0) || (SuspiciousMemoryRegions.Count > 0) || (FoundPeHeaders.Count > 0); } 
         }
 
         internal HookDetectionResult(int pid)

@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using static NativeProcesses.Core.Native.NativeDefinitions;
 
 namespace NativeProcesses.Core.Native
 {
@@ -18,9 +19,9 @@ namespace NativeProcesses.Core.Native
         private const uint STATUS_SUCCESS = 0x00000000;
 
         private const int ProcessJobObjectInformation = 7;
-        private const int ProcessDebugObjectHandle = 30;
-        private const int ProcessPowerThrottlingState = 45;
-        private const int ProcessIoPriority = 34;
+        //private const int ProcessDebugObjectHandle = 30;
+        //private const int ProcessPowerThrottlingState = 45;
+        //private const int ProcessIoPriority = 34;
         private const int ProcessBreakOnTermination = 29;
 
         #region P/Invoke Kernel32
@@ -644,8 +645,7 @@ namespace NativeProcesses.Core.Native
                 int size = sizeof(int);
                 buffer = Marshal.AllocHGlobal(size);
                 Marshal.WriteInt32(buffer, (int)priority);
-
-                int status = NtSetInformationProcess(this.Handle, ProcessIoPriority, buffer, (uint)size);
+                int status = NtSetInformationProcess(this.Handle, ProcessInformationClass.ProcessIoPriority, buffer, (uint)size);
                 if (status != 0)
                 {
                     throw new Win32Exception($"NtSetInformationProcess(ProcessIoPriority) failed with status: {status}");
@@ -675,8 +675,7 @@ namespace NativeProcesses.Core.Native
                 int size = Marshal.SizeOf(typeof(PROCESS_POWER_THROTTLING_STATE));
                 buffer = Marshal.AllocHGlobal(size);
                 Marshal.StructureToPtr(state, buffer, false);
-
-                int status = NtSetInformationProcess(this.Handle, ProcessPowerThrottlingState, buffer, (uint)size);
+                int status = NtSetInformationProcess(this.Handle, ProcessInformationClass.ProcessPowerThrottlingState, buffer, (uint)size);
                 if (status != 0)
                 {
                     throw new Win32Exception($"NtSetInformationProcess(ProcessPowerThrottlingState) failed with status: {status}");
@@ -766,7 +765,7 @@ namespace NativeProcesses.Core.Native
             {
                 uint size = (uint)Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION));
                 pbiPtr = Marshal.AllocHGlobal((int)size);
-                if (NtQueryInformationProcess(this.Handle, 0, pbiPtr, size, out _) != 0)
+                if (NtQueryInformationProcess(this.Handle, ProcessInformationClass.ProcessBasicInformation, pbiPtr, size, out _) != 0)
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "NtQueryInformationProcess failed.");
                 }
@@ -878,8 +877,7 @@ namespace NativeProcesses.Core.Native
                 {
                     isInJob = true;
                 }
-
-                int statusDebug = NtQueryInformationProcess(this.Handle, ProcessDebugObjectHandle, buffer, (uint)IntPtr.Size, out returnLength);
+                int statusDebug = NtQueryInformationProcess(this.Handle, ProcessInformationClass.ProcessDebugObjectHandle, buffer, (uint)IntPtr.Size, out returnLength);
                 if (statusDebug == 0 && Marshal.ReadIntPtr(buffer) != IntPtr.Zero)
                 {
                     isDebuggerAttached = true;
@@ -889,7 +887,7 @@ namespace NativeProcesses.Core.Native
 
                 int size = Marshal.SizeOf(typeof(PROCESS_POWER_THROTTLING_STATE));
                 buffer = Marshal.AllocHGlobal(size);
-                int statusPower = NtQueryInformationProcess(this.Handle, ProcessPowerThrottlingState, buffer, (uint)size, out returnLength);
+                int statusPower = NtQueryInformationProcess(this.Handle, ProcessInformationClass.ProcessPowerThrottlingState, buffer, (uint)size, out returnLength);
                 if (statusPower == 0)
                 {
                     PROCESS_POWER_THROTTLING_STATE state = (PROCESS_POWER_THROTTLING_STATE)Marshal.PtrToStructure(buffer, typeof(PROCESS_POWER_THROTTLING_STATE));
@@ -968,7 +966,7 @@ namespace NativeProcesses.Core.Native
             IntPtr buffer = Marshal.AllocHGlobal(size);
             try
             {
-                if (NtQueryInformationProcess(this.Handle, 4, buffer, (uint)size, out _) != 0)
+                if (NtQueryInformationProcess(this.Handle, ProcessInformationClass.ProcessIoCounters, buffer, (uint)size, out _) != 0)
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "NtQueryInformationProcess(IoCounters) failed.");
                 }

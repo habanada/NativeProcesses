@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using static NativeProcesses.Core.Native.NtProcessInfoStructs;
+using static NativeProcesses.Core.Native.NativeDefinitions;
 
 namespace NativeProcesses.Core.Native
 {
@@ -51,8 +52,7 @@ namespace NativeProcesses.Core.Native
             {
                 uint pbiSize = (uint)Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION_64));
                 pbiPtr = Marshal.AllocHGlobal((int)pbiSize);
-
-                int status = NtQueryInformationProcess(process.Handle, ProcessBasicInformation, pbiPtr, pbiSize, out _);
+                int status = NtQueryInformationProcess(process.Handle, ProcessInformationClass.ProcessBasicInformation, pbiPtr, pbiSize, out _);
                 if (status != 0)
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "NtQueryInformationProcess(ProcessBasicInformation) failed.");
@@ -112,7 +112,7 @@ namespace NativeProcesses.Core.Native
 
             try
             {
-                int status = NtQueryInformationProcess(process.Handle, ProcessWow64Information, peb32AddressPtr, (uint)IntPtr.Size, out _);
+                int status = NtQueryInformationProcess(process.Handle, ProcessInformationClass.ProcessWow64Information, peb32AddressPtr, (uint)IntPtr.Size, out _);
                 if (status != 0)
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "NtQueryInformationProcess(ProcessWow64Information) failed.");

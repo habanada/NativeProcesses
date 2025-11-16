@@ -166,6 +166,7 @@ namespace NativeProcesses.Core.Inspection
 
         public const int IMAGE_DIRECTORY_ENTRY_EXPORT = 0;
         public const int IMAGE_DIRECTORY_ENTRY_IMPORT = 1;
+        public const int IMAGE_DIRECTORY_ENTRY_BASERELOC = 5;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct IMAGE_EXPORT_DIRECTORY
@@ -192,5 +193,18 @@ namespace NativeProcesses.Core.Inspection
             public uint Name;
             public uint FirstThunk;
         }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct IMAGE_BASE_RELOCATION
+        {
+            public uint VirtualAddress;
+            public uint SizeOfBlock;
+        }
+
+        // Diese Konstanten definieren, WIE eine Adresse gepatcht wird
+        // (Wir brauchen nur 0 und 10 für 32/64-Bit)
+        public const ushort IMAGE_REL_BASED_ABSOLUTE = 0;
+        public const ushort IMAGE_REL_BASED_DIR64 = 10;
+        public const ushort IMAGE_REL_BASED_HIGHLOW = 3;
     }
 }

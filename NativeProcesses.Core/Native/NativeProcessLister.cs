@@ -7,16 +7,16 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using static NativeProcesses.Core.Native.NativeDefinitions;
+using static NativeProcesses.Core.Native.NativeProcessLister;
 
 namespace NativeProcesses.Core.Native
 {
     public class NativeProcessLister
     {
         private IEngineLogger _logger;
-        private const int SystemProcessInformation = 5;
         private const uint STATUS_INFO_LENGTH_MISMATCH = 0xC0000004;
         private const uint STATUS_SUCCESS = 0x00000000;
-        private const int SystemThreadInformation = 51;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct SYSTEM_THREAD_INFORMATION_CONTAINER
@@ -129,7 +129,7 @@ namespace NativeProcesses.Core.Native
                     bufferSize = bufferSize == 0 ? 1024 * 1024 : bufferSize * 2;
                     buffer = Marshal.AllocHGlobal((int)bufferSize);
                     status = NtQuerySystemInformation(
-                        SystemProcessInformation,
+                        SystemInformationClass.SystemProcessInformation,
                         buffer,
                         bufferSize,
                         out returnLength);
@@ -252,7 +252,7 @@ namespace NativeProcesses.Core.Native
                     buffer = Marshal.AllocHGlobal((int)bufferSize);
 
                     status = NtQuerySystemInformation(
-                        SystemThreadInformation,
+                        SystemInformationClass.SystemThreadInformation,
                         buffer,
                         bufferSize,
                         out returnLength);

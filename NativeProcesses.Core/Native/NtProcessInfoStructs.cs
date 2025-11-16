@@ -9,9 +9,6 @@ namespace NativeProcesses.Core.Native
 {
     internal static class NtProcessInfoStructs
     {
-        internal const int ProcessBasicInformation = 0;
-        internal const int ProcessWow64Information = 26;
-
         [StructLayout(LayoutKind.Sequential)]
         internal struct PROCESS_BASIC_INFORMATION_64
         {

@@ -699,13 +699,88 @@ namespace ProcessDemo
             _menu.Items.Add("Show UWP Package Info (F3)", null, (s, e) => ShowUwpPackageInfo_Click());
             _menu.Items.Add("-"); // Trennlinie
             _menu.Items.Add("Check for Critical Flag", null, (s, e) => CheckProcessCriticality(SelectedProcess));
+            _menu.Items.Add("-");
+            _menu.Items.Add("Scan for Hooks (IAT, Inline, Memory)...", null, (s, e) => ScanSelectedProcessForHooks());
+            _menu.Items.Add("Scan System for Hidden Processes...", null, (s, e) => ScanForHiddenProcesses());
 
             _menuThread.Items.Add("Show Priorities (F7)", null, (s, e) => ShowPrioritiesForSelectedThread());
             _menuThread.Items.Add("Resolve Start Address (F8)", null, (s, e) => ResolveSelectedThreadAddress());
             _menuThread.Items.Add("Show Managed Stack", null, (s, e) => ShowManagedStackForSelectedThread());
             gridThreads.ContextMenuStrip = _menuThread;
         }
+        private async void ScanSelectedProcessForHooks()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
 
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var result = await ProcessManager.ScanProcessForHooksAsync(p.FullInfo, _logger);
+                this.Cursor = Cursors.Default;
+
+                if (!result.IsHooked)
+                {
+                    MessageBox.Show(this, $"Scan complete. No hooks found in PID {p.Pid} ({p.Name}).", "Scan Result", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                if (result.IatHooks.Count > 0)
+                {
+                    using (var f = new DetailForm($"{p.Name} - IAT Hooks Found ({result.IatHooks.Count})", result.IatHooks, p.Pid))
+                        f.ShowDialog(this);
+                }
+                if (result.InlineHooks.Count > 0)
+                {
+                    using (var f = new DetailForm($"{p.Name} - Inline Hooks Found ({result.InlineHooks.Count})", result.InlineHooks, p.Pid))
+                        f.ShowDialog(this);
+                }
+                if (result.SuspiciousThreads.Count > 0)
+                {
+                    using (var f = new DetailForm($"{p.Name} - Suspicious Threads Found ({result.SuspiciousThreads.Count})", result.SuspiciousThreads, p.Pid))
+                        f.ShowDialog(this);
+                }
+                if (result.SuspiciousMemoryRegions.Count > 0)
+                {
+                    using (var f = new DetailForm($"{p.Name} - Suspicious Memory Regions Found ({result.SuspiciousMemoryRegions.Count})", result.SuspiciousMemoryRegions, p.Pid))
+                        f.ShowDialog(this);
+                }
+                if (result.FoundPeHeaders.Count > 0)
+                {
+                    using (var f = new DetailForm($"{p.Name} - Hidden PE Files Found ({result.FoundPeHeaders.Count})", result.FoundPeHeaders, p.Pid))
+                        f.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                this.Cursor = Cursors.Default;
+                MessageBox.Show(this, $"Hook scan failed for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private async void ScanForHiddenProcesses()
+        {
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                var results = await ProcessManager.ScanForHiddenProcessesAsync(_logger);
+                this.Cursor = Cursors.Default;
+
+                if (results.Count == 0)
+                {
+                    MessageBox.Show(this, "Scan complete. No hidden processes found.", "Scan Result", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                using (var f = new DetailForm($"Hidden Processes Found ({results.Count})", results, -1))
+                    f.ShowDialog(this);
+            }
+            catch (Exception ex)
+            {
+                this.Cursor = Cursors.Default;
+                MessageBox.Show(this, $"Hidden process scan failed:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
         //private void InitialLoadTimer_Tick(object sender, EventArgs e)
         //{
         //    (sender as Timer).Stop();
@@ -947,10 +1022,13 @@ namespace ProcessDemo
         private void LoadProcesses()
         {
             // Schritt 1: Provider auf Hybrid umstellen (Polling für CPU/Mem, ETW für I/O, Start/Stop)
+            var etwProvider = new EtwProcessProvider();
             var provider = new HybridProcessProvider(
-                new PollingProcessProvider(TimeSpan.FromSeconds(1)), // Liefert CPU/Speicher
-                new EtwProcessProvider() // Liefert Echtzeit-Events (Start/Stop, I/O, Netzwerk, PageFaults)
+                new PollingProcessProvider(TimeSpan.FromSeconds(1)),
+                etwProvider
             );
+
+            etwProvider.ThreatDetected += OnThreatDetected;
 
             // Schritt 2: Logger instanziieren (wie im Original)
             _logger = new ConsoleLogger(richTextBox1);
@@ -987,8 +1065,57 @@ namespace ProcessDemo
             _service.ProcessUpdated += Service_ProcessUpdated; // Für statische Daten (ExePath, Signer...)
             _service.ProcessVolatileUpdated += Service_ProcessVolatileUpdated; // Für CPU, RAM, I/O...
 
+            etwProvider.ThreatDetected += OnThreatDetected;
+            etwProvider.HeapEventDetected += OnHeapEventDetected;
+
             // Schritt 8: Service starten (Veraltete Timer-Logik entfernt, aus Schritt 5.5)
             _service.Start();
+        }
+        private void OnHeapEventDetected(NativeProcesses.Core.Inspection.NativeHeapAllocationInfo info)
+        {
+            // Verhindern, dass das Log geflutet wird.
+            // Wir loggen nur, wenn der Prozess aktuell im Grid ausgewählt ist.
+            var selectedPid = SelectedProcess?.Pid;
+            if (selectedPid == null || info.ProcessId != selectedPid.Value)
+            {
+                return;
+            }
+
+            if (richTextBox1.InvokeRequired)
+            {
+                richTextBox1.BeginInvoke(new Action(() => OnHeapEventDetected(info)));
+                return;
+            }
+
+            try
+            {
+                string msg = $"[Heap] PID {info.ProcessId}: {info.EventName} at 0x{info.BaseAddress.ToString("X")} (Size: {info.Size} bytes)\n";
+                richTextBox1.SelectionColor = Color.Blue;
+                richTextBox1.AppendText(msg);
+                richTextBox1.ScrollToCaret();
+                richTextBox1.SelectionColor = Color.Black;
+            }
+            catch { }
+        }
+        private void OnThreatDetected(NativeProcesses.Core.Inspection.ThreatIntelInfo info)
+        {
+            if (richTextBox1.InvokeRequired)
+            {
+                richTextBox1.BeginInvoke(new Action(() => OnThreatDetected(info)));
+                return;
+            }
+
+            try
+            {
+                string msg = $"[!!! THREAT DETECTED !!!] PID: {info.ProcessId}, Event: {info.EventName}, Detail: {info.Detail}\n";
+                richTextBox1.SelectionColor = Color.Red;
+                richTextBox1.Font = new Font(richTextBox1.Font, FontStyle.Bold);
+                richTextBox1.AppendText(msg);
+                richTextBox1.ScrollToCaret();
+                richTextBox1.SelectionColor = Color.Black;
+                richTextBox1.Font = new Font(richTextBox1.Font, FontStyle.Regular);
+            }
+            catch { }
         }
         private void EnableGridDoubleBuffering(DataGridView dgv)
         {

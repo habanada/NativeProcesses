@@ -276,7 +276,14 @@ namespace NativeProcesses.Core.Native
                             try
                             {
                                 var cert = new X509Certificate2(pCertContext);
-                                return cert.GetNameInfo(X509NameType.SimpleName, false);
+                                string signerName = cert.GetNameInfo(X509NameType.SimpleName, false);
+
+                                // HIER IST DER FIX: Verhindern, dass null zurückgegeben wird
+                                if (string.IsNullOrEmpty(signerName))
+                                {
+                                    return "N/A (Signer Name Empty)";
+                                }
+                                return signerName;
                             }
                             finally
                             {

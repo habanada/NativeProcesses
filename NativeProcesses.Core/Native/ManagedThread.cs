@@ -5,6 +5,7 @@
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using static NativeProcesses.Core.Native.NativeDefinitions;
 
 namespace NativeProcesses.Core.Native
 {
@@ -48,8 +49,6 @@ namespace NativeProcesses.Core.Native
             uint ThreadInformationLength,
             out uint ReturnLength);
 
-        private const int ThreadIoPriority = 33;
-        private const int ThreadPagePriority = 39;
 
         public IntPtr Handle { get; private set; }
         public int ThreadId { get; private set; }
@@ -101,14 +100,12 @@ namespace NativeProcesses.Core.Native
                 uint returnLength;
                 int size = sizeof(int);
                 buffer = Marshal.AllocHGlobal(size);
-
-                int statusIo = NtQueryInformationThread(this.Handle, ThreadIoPriority, buffer, (uint)size, out returnLength);
+                int statusIo = NtQueryInformationThread(this.Handle, ThreadInformationClass.ThreadIoPriority, buffer, (uint)size, out returnLength);
                 if (statusIo == 0)
                 {
                     ioPriority = (Models.IoPriorityHint)Marshal.ReadInt32(buffer);
                 }
-
-                int statusMem = NtQueryInformationThread(this.Handle, ThreadPagePriority, buffer, (uint)size, out returnLength);
+                int statusMem = NtQueryInformationThread(this.Handle, ThreadInformationClass.ThreadPagePriority, buffer, (uint)size, out returnLength);
                 if (statusMem == 0)
                 {
                     memPriority = (Models.MemoryPriorityHint)Marshal.ReadInt32(buffer);

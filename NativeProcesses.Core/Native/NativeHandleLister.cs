@@ -7,14 +7,17 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using static NativeProcesses.Core.Native.NativeDefinitions;
+using System.Collections.Concurrent;
 
 namespace NativeProcesses.Core.Native
 {
     public class NativeHandleLister
     {
         private IEngineLogger _logger;
+        // Cache for Typ-Indizes (eg. 32 -> "File")
+        private static ConcurrentDictionary<ushort, string> _typeCache = new ConcurrentDictionary<ushort, string>();
 
-        private const int SystemHandleInformation = 16;
         private const int ObjectNameInformation = 1;
         private const int ObjectTypeInformation = 2;
 
@@ -129,6 +132,25 @@ namespace NativeProcesses.Core.Native
         {
             public UNICODE_STRING Name;
         }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SYSTEM_HANDLE_INFORMATION_EX
+        {
+            public IntPtr NumberOfHandles;
+            public IntPtr Reserved;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX
+        {
+            public IntPtr Object;
+            public IntPtr UniqueProcessId;
+            public IntPtr HandleValue;
+            public uint GrantedAccess;
+            public ushort CreatorBackTraceIndex;
+            public ushort ObjectTypeIndex;
+            public uint HandleAttributes;
+            public uint Reserved;
+        }
         #endregion
 
         public NativeHandleLister(IEngineLogger logger)
@@ -136,7 +158,7 @@ namespace NativeProcesses.Core.Native
             _logger = logger;
         }
 
-        public List<NativeHandleInfo> GetProcessHandles(int pid)
+          public List<NativeHandleInfo> GetProcessHandles(int pid)
         {
             var handles = new List<NativeHandleInfo>();
             IntPtr targetProcessHandle = IntPtr.Zero;
@@ -146,7 +168,6 @@ namespace NativeProcesses.Core.Native
             try
             {
                 const uint PROCESS_QUERY_INFORMATION = 0x0400;
-
                 targetProcessHandle = OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION, false, pid);
                 if (targetProcessHandle == IntPtr.Zero)
                 {
@@ -160,7 +181,7 @@ namespace NativeProcesses.Core.Native
                 while (true)
                 {
                     uint status = NtQuerySystemInformation(
-                        SystemHandleInformation,
+                        SystemInformationClass.SystemExtendedHandleInformation,
                         buffer,
                         bufferSize,
                         out uint returnLength);
@@ -175,41 +196,59 @@ namespace NativeProcesses.Core.Native
                         bufferSize = returnLength + 0x2000;
                         if (bufferSize < returnLength)
                         {
-                            _logger?.Log(LogLevel.Error, "NtQuerySystemInformation(Handles) buffer size overflow.", null);
+                            _logger?.Log(LogLevel.Error, "NtQuerySystemInformation(HandlesEx) buffer size overflow.", null);
                             return handles;
                         }
                         buffer = Marshal.AllocHGlobal((int)bufferSize);
                     }
                     else
                     {
-                        _logger?.Log(LogLevel.Error, $"NtQuerySystemInformation(Handles) failed.", new Win32Exception($"Status: 0x{status:X}"));
+                        _logger?.Log(LogLevel.Error, $"NtQuerySystemInformation(HandlesEx) failed.", new Win32Exception($"Status: 0x{status:X}"));
                         return handles;
                     }
                 }
 
-                long handleCount = Marshal.ReadIntPtr(buffer).ToInt64();
-                IntPtr handleArrayPtr = IntPtr.Add(buffer, IntPtr.Size);
-                int handleEntrySize = Marshal.SizeOf(typeof(SYSTEM_HANDLE_ENTRY));
-
+                var header = (SYSTEM_HANDLE_INFORMATION_EX)Marshal.PtrToStructure(buffer, typeof(SYSTEM_HANDLE_INFORMATION_EX));
+                long handleCount = header.NumberOfHandles.ToInt64();
+                IntPtr handleArrayPtr = IntPtr.Add(buffer, Marshal.SizeOf(typeof(SYSTEM_HANDLE_INFORMATION_EX)));
+                int handleEntrySize = Marshal.SizeOf(typeof(SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX));
                 for (long i = 0; i < handleCount; i++)
                 {
                     IntPtr handleEntryPtr = IntPtr.Add(handleArrayPtr, (int)(i * handleEntrySize));
-                    SYSTEM_HANDLE_ENTRY entry = (SYSTEM_HANDLE_ENTRY)Marshal.PtrToStructure(handleEntryPtr, typeof(SYSTEM_HANDLE_ENTRY));
+                    SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX entry = (SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX)Marshal.PtrToStructure(handleEntryPtr, typeof(SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX));
 
-                    if (entry.ProcessId != pid)
+                    if (entry.UniqueProcessId.ToInt32() != pid)
                     {
                         continue;
                     }
 
+                    // --- OPTIMIERUNG START ---
+
+                    string typeName = null;
+                    bool typeKnown = _typeCache.TryGetValue(entry.ObjectTypeIndex, out typeName);
+
+                    // Wenn wir den Typ kennen UND er uns nicht interessiert, überspringen wir alles!
+                    // Das spart 90% der teuren NtDuplicateObject-Aufrufe.
+                    if (typeKnown)
+                    {
+                        if (typeName != "File" && typeName != "Key" && typeName != "Section" &&
+                            typeName != "Event" && typeName != "Mutant" && typeName != "Directory")
+                        {
+                            continue;
+                        }
+                    }
+
+                    // Wenn wir hier sind, ist es entweder ein interessanter Typ ODER ein unbekannter Typ.
+                    // Wir müssen duplizieren.
                     IntPtr duplicatedHandle = IntPtr.Zero;
                     uint dupStatus = NtDuplicateObject(
                         targetProcessHandle,
-                        (IntPtr)entry.HandleValue,
+                        entry.HandleValue,
                         currentProcessHandle,
                         out duplicatedHandle,
-                        0, //DesiredAccess (wird ignoriert bei DUPLICATE_SAME_ACCESS)
-                        0, //HandleAttributes
-                        DUPLICATE_SAME_ACCESS); //Options
+                        0,
+                        0,
+                        DUPLICATE_SAME_ACCESS);
 
                     if (dupStatus != STATUS_SUCCESS)
                     {
@@ -218,29 +257,92 @@ namespace NativeProcesses.Core.Native
 
                     try
                     {
-                        string typeName = GetHandleType(duplicatedHandle);
-                        string name = "";
-
-                        if (typeName == "File" || typeName == "Key" || typeName == "Section" || typeName == "Event" || typeName == "Mutant" || typeName == "Directory")
+                        // Wenn der Typ noch unbekannt ist, lernen wir ihn jetzt.
+                        if (!typeKnown)
                         {
-                            name = GetHandleName(duplicatedHandle);
+                            typeName = GetHandleType(duplicatedHandle);
+                            if (!string.IsNullOrEmpty(typeName))
+                            {
+                                _typeCache.TryAdd(entry.ObjectTypeIndex, typeName);
+                            }
                         }
 
-                        handles.Add(new NativeHandleInfo
+                        // Jetzt nochmal prüfen (mit dem nun bekannten Namen)
+                        if (typeName == "File" || typeName == "Key" || typeName == "Section" ||
+                            typeName == "Event" || typeName == "Mutant" || typeName == "Directory")
                         {
-                            ProcessId = entry.ProcessId,
-                            HandleValue = entry.HandleValue,
-                            GrantedAccess = entry.GrantedAccess,
-                            ObjectTypeIndex = entry.ObjectTypeIndex,
-                            TypeName = typeName,
-                            Name = name
-                        });
+                            string name = GetHandleName(duplicatedHandle);
+
+                            if (!string.IsNullOrEmpty(name))
+                            {
+                                handles.Add(new NativeHandleInfo
+                                {
+                                    ProcessId = pid,
+                                    HandleValue = (ushort)entry.HandleValue.ToInt32(),
+                                    GrantedAccess = entry.GrantedAccess,
+                                    ObjectTypeIndex = (byte)entry.ObjectTypeIndex,
+                                    TypeName = typeName,
+                                    Name = name
+                                });
+                            }
+                        }
                     }
                     finally
                     {
                         CloseHandle(duplicatedHandle);
                     }
+                    // --- OPTIMIERUNG ENDE ---
                 }
+                //for (long i = 0; i < handleCount; i++)
+                //{
+                //    IntPtr handleEntryPtr = IntPtr.Add(handleArrayPtr, (int)(i * handleEntrySize));
+                //    SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX entry = (SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX)Marshal.PtrToStructure(handleEntryPtr, typeof(SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX));
+
+                //    if (entry.UniqueProcessId.ToInt32() != pid)
+                //    {
+                //        continue;
+                //    }
+
+                //    IntPtr duplicatedHandle = IntPtr.Zero;
+                //    uint dupStatus = NtDuplicateObject(
+                //        targetProcessHandle,
+                //        entry.HandleValue,
+                //        currentProcessHandle,
+                //        out duplicatedHandle,
+                //        0,
+                //        0,
+                //        DUPLICATE_SAME_ACCESS);
+
+                //    if (dupStatus != STATUS_SUCCESS)
+                //    {
+                //        continue;
+                //    }
+
+                //    try
+                //    {
+                //        string typeName = GetHandleType(duplicatedHandle);
+                //        string name = "";
+
+                //        if (typeName == "File" || typeName == "Key" || typeName == "Section" || typeName == "Event" || typeName == "Mutant" || typeName == "Directory")
+                //        {
+                //            name = GetHandleName(duplicatedHandle);
+                //        }
+
+                //        handles.Add(new NativeHandleInfo
+                //        {
+                //            ProcessId = pid,
+                //            HandleValue = (ushort)entry.HandleValue.ToInt32(),
+                //            GrantedAccess = entry.GrantedAccess,
+                //            ObjectTypeIndex = (byte)entry.ObjectTypeIndex,
+                //            TypeName = typeName,
+                //            Name = name
+                //        });
+                //    }
+                //    finally
+                //    {
+                //        CloseHandle(duplicatedHandle);
+                //    }
+                //}
             }
             catch (Exception ex)
             {
@@ -260,7 +362,6 @@ namespace NativeProcesses.Core.Native
 
             return handles;
         }
-
         private string GetHandleType(IntPtr handle)
         {
             IntPtr buffer = IntPtr.Zero;

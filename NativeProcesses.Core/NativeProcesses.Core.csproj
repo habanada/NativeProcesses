@@ -212,7 +212,9 @@
     <Compile Include="Engine\ProcessMonitorEngine.cs" />
     <Compile Include="Engine\ProcessVolatileUpdate.cs" />
     <Compile Include="Inspection\DotNetInspector.cs" />
+    <Compile Include="Inspection\FoundPeHeaderInfo.cs" />
     <Compile Include="Inspection\HiddenProcessInfo.cs" />
+    <Compile Include="Inspection\NativeHeapAllocationInfo.cs" />
     <Compile Include="Inspection\SecurityInspector.cs" />
     <Compile Include="Inspection\ThreatIntelInfo.cs" />
     <Compile Include="Models\DotNetAppDomainInfo.cs" />
@@ -235,6 +237,7 @@
     <Compile Include="Native\HandleTypeFilter.cs" />
     <Compile Include="Native\IpHelper.cs" />
     <Compile Include="Native\ManagedProcess.cs" />
+    <Compile Include="Native\NativeDefinitions.cs" />
     <Compile Include="Native\NativeHandleLister.cs" />
     <Compile Include="Native\NetworkManager.cs" />
     <Compile Include="Native\NtProcessInfoStructs.cs" />

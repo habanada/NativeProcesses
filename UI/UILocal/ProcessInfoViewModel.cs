@@ -14,6 +14,8 @@ namespace ProcessDemo
     public class ProcessInfoViewModel : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
+        public FullProcessInfo FullInfo { get; private set; }
+
         private void Notify([CallerMemberName] string prop = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
@@ -341,9 +343,11 @@ namespace ProcessDemo
             this.Pid = source.Pid;
             this.Threads = new BindingList<ThreadInfoViewModel>();
             this.ApplyUpdate(source);
+            this.FullInfo = source; 
         }
         public void ApplyUpdate(FullProcessInfo source)
         {
+            this.FullInfo = source;
             this.Name = source.Name;
             this.WorkingSetSize = source.WorkingSetSize;
             this.PagedPoolUsage = source.PagedPoolUsage;
