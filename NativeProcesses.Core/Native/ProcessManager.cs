@@ -31,6 +31,198 @@ namespace NativeProcesses.Core.Native
 
 
 
+        public static Task<bool> IsProcessCriticalAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                // Erfordert nur minimale Rechte
+                var access = ProcessAccessFlags.QueryLimitedInformation;
+                try
+                {
+                    using (var proc = new ManagedProcess(pid, access))
+                    {
+                        return proc.IsCriticalProcess();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger?.Log(LogLevel.Debug, $"Failed to check critical status for PID {pid}.", ex);
+                    // Bei Fehler (z.B. Access Denied) als "nicht kritisch" annehmen
+                    return false;
+                }
+            });
+        }
+        public static Task<List<HiddenProcessInfo>> ScanForHiddenProcessesAsync(IEngineLogger logger = null, int maxPid = 65536)
+        {
+            return Task.Run(() =>
+            {
+                var results = new List<HiddenProcessInfo>();
+                var lister = new NativeProcessLister(logger);
+                HashSet<int> officialPids;
+                HashSet<int> threadPids;
+
+                // 1. Hole Ansicht A (Offizielle Prozessliste)
+                try
+                {
+                    officialPids = new HashSet<int>(lister.GetProcesses().Select(p => p.Pid));
+                }
+                catch (Exception ex)
+                {
+                    logger?.Log(LogLevel.Error, "ScanForHiddenProcesses: Failed to get official process list (View A).", ex);
+                    return results;
+                }
+
+                // 2. Hole Ansicht B (Thread-Listen-Ansicht)
+                try
+                {
+                    threadPids = lister.GetPidsFromThreadView();
+                }
+                catch (Exception ex)
+                {
+                    logger?.Log(LogLevel.Error, "ScanForHiddenProcesses: Failed to get thread list (View B).", ex);
+                    threadPids = new HashSet<int>();
+                }
+
+                var access = ProcessAccessFlags.QueryLimitedInformation | ProcessAccessFlags.VmRead;
+
+                // 3. Vergleiche Ansicht A vs. Ansicht B
+                foreach (int pid in threadPids)
+                {
+                    if (pid == 0 || officialPids.Contains(pid))
+                    {
+                        continue;
+                    }
+
+                    // FUND: PID ist in der Thread-Liste, aber nicht in der Prozess-Liste
+                    try
+                    {
+                        using (var proc = new ManagedProcess(pid, access))
+                        {
+                            string name = "[Unknown]";
+                            string path = "[Access Denied]";
+                            try
+                            {
+                                path = proc.GetExePath();
+                                name = System.IO.Path.GetFileName(path);
+                            }
+                            catch { }
+
+                            results.Add(new HiddenProcessInfo
+                            {
+                                Pid = pid,
+                                Name = name,
+                                ExePath = path,
+                                DetectionMethod = "Thread List Discrepancy"
+                            });
+                        }
+                    }
+                    catch (System.ComponentModel.Win32Exception)
+                    {
+                        // Prozess ist vielleicht schon beendet (Timing-Problem)
+                    }
+                }
+
+                // 4. Starte Ansicht C (PID Brute-Force-Scan)
+                for (int pid = 4; pid <= maxPid; pid += 4)
+                {
+                    if (officialPids.Contains(pid) || threadPids.Contains(pid))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        using (var proc = new ManagedProcess(pid, access))
+                        {
+                            // FUND: PID ist weder in A noch B, aber OpenProcess war erfolgreich
+                            string name = "[Unknown]";
+                            string path = "[Access Denied]";
+                            try
+                            {
+                                path = proc.GetExePath();
+                                name = System.IO.Path.GetFileName(path);
+                            }
+                            catch { }
+
+                            results.Add(new HiddenProcessInfo
+                            {
+                                Pid = pid,
+                                Name = name,
+                                ExePath = path,
+                                DetectionMethod = "PID Brute-Force Scan"
+                            });
+                        }
+                    }
+                    catch (System.ComponentModel.Win32Exception)
+                    {
+                    }
+                }
+                return results;
+            });
+        }
+        //public static Task<List<HiddenProcessInfo>> ScanForHiddenProcessesAsync(IEngineLogger logger = null, int maxPid = 65536)
+        //{
+        //    return Task.Run(() =>
+        //    {
+        //        var results = new List<HiddenProcessInfo>();
+        //        var lister = new NativeProcessLister(logger);
+        //        HashSet<int> officialPids;
+
+        //        try
+        //        {
+        //            officialPids = new HashSet<int>(lister.GetProcesses().Select(p => p.Pid));
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            logger?.Log(LogLevel.Error, "ScanForHiddenProcesses: Failed to get official process list.", ex);
+        //            return results;
+        //        }
+
+        //        var access = ProcessAccessFlags.QueryLimitedInformation | ProcessAccessFlags.VmRead;
+
+        //        for (int pid = 4; pid <= maxPid; pid += 4)
+        //        {
+        //            if (officialPids.Contains(pid))
+        //            {
+        //                continue;
+        //            }
+
+        //            try
+        //            {
+        //                using (var proc = new ManagedProcess(pid, access))
+        //                {
+        //                    string name = "[Unknown]";
+        //                    string path = "[Access Denied]";
+        //                    try
+        //                    {
+        //                        path = proc.GetExePath();
+        //                        name = System.IO.Path.GetFileName(path);
+        //                    }
+        //                    catch (Exception ex)
+        //                    {
+        //                        logger?.Log(LogLevel.Debug, $"ScanForHiddenProcesses: Found hidden PID {pid} but failed to get details.", ex);
+        //                    }
+
+        //                    results.Add(new HiddenProcessInfo
+        //                    {
+        //                        Pid = pid,
+        //                        Name = name,
+        //                        ExePath = path,
+        //                        DetectionMethod = "PID Brute-Force Scan"
+        //                    });
+        //                }
+        //            }
+        //            catch (System.ComponentModel.Win32Exception)
+        //            {
+        //            }
+        //            catch (Exception ex)
+        //            {
+        //                logger?.Log(LogLevel.Debug, $"ScanForHiddenProcesses: Unexpected error on PID {pid}.", ex);
+        //            }
+        //        }
+        //        return results;
+        //    });
+        //}
         public static Task<HookDetectionResult> ScanProcessForHooksAsync(FullProcessInfo processInfo, IEngineLogger logger = null)
         {
             return Task.Run(async () =>

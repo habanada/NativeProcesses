@@ -212,7 +212,9 @@
     <Compile Include="Engine\ProcessMonitorEngine.cs" />
     <Compile Include="Engine\ProcessVolatileUpdate.cs" />
     <Compile Include="Inspection\DotNetInspector.cs" />
+    <Compile Include="Inspection\HiddenProcessInfo.cs" />
     <Compile Include="Inspection\SecurityInspector.cs" />
+    <Compile Include="Inspection\ThreatIntelInfo.cs" />
     <Compile Include="Models\DotNetAppDomainInfo.cs" />
     <Compile Include="Models\DotNetExceptionInfo.cs" />
     <Compile Include="Models\DotNetFinalizerInfo.cs" />

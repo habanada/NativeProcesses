@@ -21,6 +21,7 @@ namespace NativeProcesses.Core.Native
         private const int ProcessDebugObjectHandle = 30;
         private const int ProcessPowerThrottlingState = 45;
         private const int ProcessIoPriority = 34;
+        private const int ProcessBreakOnTermination = 29;
 
         #region P/Invoke Kernel32
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -1277,6 +1278,42 @@ namespace NativeProcesses.Core.Native
                 }
             }
             return regions;
+        }
+        public bool IsCriticalProcess()
+        {
+            IntPtr buffer = IntPtr.Zero;
+            try
+            {
+                // Das Flag ist ein ULONG (4 Bytes auf 32-bit, 8 auf 64-bit),
+                // aber die API erwartet hier einen 32-bit int Puffer.
+                uint size = sizeof(int);
+                buffer = Marshal.AllocHGlobal((int)size);
+
+                int status = NtQueryInformationProcess(
+                    this.Handle,
+                    ProcessBreakOnTermination,
+                    buffer,
+                    size,
+                    out uint returnLength
+                );
+
+                if (status == 0)
+                {
+                    // Wenn der Wert 1 ist, ist der Prozess als kritisch markiert.
+                    int value = Marshal.ReadInt32(buffer);
+                    return (value == 1);
+                }
+
+                // Bei Fehlern (z.B. Access Denied) gehen wir von "nicht kritisch" aus.
+                return false;
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
         }
         #endregion
 

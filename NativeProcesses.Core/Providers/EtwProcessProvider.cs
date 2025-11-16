@@ -14,6 +14,8 @@ using System.Threading;
 using System.Collections.Concurrent;
 using NativeProcesses.Core.Native;
 using System.Linq;
+using NativeProcesses.Core.Inspection;
+using Microsoft.Diagnostics.Tracing;
 
 namespace NativeProcesses.Core.Providers
 {
@@ -26,6 +28,7 @@ namespace NativeProcesses.Core.Providers
         private Timer _flushTimer;
         private int _intervalMs = 1000;
         private readonly ConcurrentDictionary<int, IoUsageData> _usageData = new ConcurrentDictionary<int, IoUsageData>();
+        public event Action<ThreatIntelInfo> ThreatDetected;
 
         private class IoUsageData
         {
@@ -103,6 +106,8 @@ namespace NativeProcesses.Core.Providers
                                        KernelTraceEventParser.Keywords.MemoryHardFaults;
 
                         _session.EnableKernelProvider(keywords);
+                        _session.EnableProvider("Microsoft-Windows-Threat-Intelligence");
+                        _session.Source.Dynamic.All += OnDynamicThreatEvent;
 
                         _session.Source.Kernel.ProcessStart += OnProcessStart;
                         _session.Source.Kernel.ProcessStop += OnProcessStop;
@@ -248,6 +253,41 @@ namespace NativeProcesses.Core.Providers
                 _logger?.Log(LogLevel.Error, "EtwProcessProvider.AggregateAndFlush timer callback failed.", ex);
             }
         }
+        private void OnDynamicThreatEvent(TraceEvent data)
+        {
+            if (ThreatDetected == null)
+                return;
+
+            try
+            {
+                if (data.ProviderName.Equals("Microsoft-Windows-Threat-Intelligence", StringComparison.OrdinalIgnoreCase))
+                {
+                    string detail = string.Empty;
+                    try
+                    {
+                        if (data.PayloadNames.Length > 0)
+                        {
+                            detail = $"{data.PayloadNames[0]}: {data.PayloadValue(0)}";
+                        }
+                    }
+                    catch { }
+
+                    var info = new ThreatIntelInfo
+                    {
+                        ProcessId = data.ProcessID,
+                        EventName = data.EventName,
+                        ProviderName = data.ProviderName,
+                        TimeStamp = data.TimeStamp,
+                        Detail = detail
+                    };
+                    ThreatDetected?.Invoke(info);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Debug, $"EtwProcessProvider.OnDynamicThreatEvent failed for {data.EventName}", ex);
+            }
+        }
         public void Stop()
         {
             try
@@ -274,6 +314,7 @@ namespace NativeProcesses.Core.Providers
                     _session.Source.Kernel.TcpIpSend -= OnNetworkSend;
                     _session.Source.Kernel.TcpIpRecv -= OnNetworkReceive;
                     _session.Source.Kernel.MemoryHardFault -= OnMemoryHardFault;
+                    _session.Source.Dynamic.All -= OnDynamicThreatEvent;
                 }
                 catch (Exception ex)
                 {

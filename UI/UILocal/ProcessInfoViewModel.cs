@@ -322,6 +322,20 @@ namespace ProcessDemo
             set { _totalNetworkRecv = value; Notify(); }
         }
 
+        private bool _isCheckingCriticality = false;
+        public bool IsCheckingCriticality
+        {
+            get { return _isCheckingCriticality; }
+            set { _isCheckingCriticality = value; Notify(); }
+        }
+
+        private bool _isMarkedCritical = false;
+        public bool IsMarkedCritical
+        {
+            get { return _isMarkedCritical; }
+            set { _isMarkedCritical = value; Notify(); }
+        }
+
         public ProcessInfoViewModel(FullProcessInfo source)
         {
             this.Pid = source.Pid;

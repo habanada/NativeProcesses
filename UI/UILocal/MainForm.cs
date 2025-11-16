@@ -96,6 +96,109 @@ namespace ProcessDemo
                 ShowDotNetGcRootsForSelectedProcess();
             }
         }
+        private async void CheckProcessCriticality(ProcessInfoViewModel p)
+        {
+            if (p == null || p.IsCheckingCriticality)
+                return;
+
+            p.IsCheckingCriticality = true;
+
+            try
+            {
+                bool isCritical = await ProcessManager.IsProcessCriticalAsync(p.Pid, _logger);
+                p.IsMarkedCritical = isCritical; // Status im ViewModel speichern
+
+                // UI-Update muss im UI-Thread erfolgen
+                if (grid.InvokeRequired)
+                {
+                    grid.Invoke(new Action(() => UpdateRowColorForCriticality(p)));
+                }
+                else
+                {
+                    UpdateRowColorForCriticality(p);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Debug, $"CheckProcessCriticality für PID {p.Pid} fehlgeschlagen.", ex);
+            }
+            finally
+            {
+                p.IsCheckingCriticality = false;
+            }
+        }
+
+        private void UpdateRowColorForCriticality(ProcessInfoViewModel p)
+        {
+            var row = grid.Rows.Cast<DataGridViewRow>()
+                          .FirstOrDefault(r => r.DataBoundItem == p);
+
+            if (row == null) return;
+
+            bool isLegitCritical = false;
+
+            // Prüfen, ob die Details (ExePath, SignerName) schon geladen wurden
+            if (p.ExePath != null && !p.ExePath.StartsWith("["))
+            {
+                // Details sind geladen. WIR FÜHREN JETZT EINE SICHERE PRÜFUNG DURCH.
+                string system32Path = Environment.GetFolderPath(Environment.SpecialFolder.System).ToLowerInvariant();
+                string exePathLower = p.ExePath.ToLowerInvariant();
+
+                // 1. Pfad-Prüfung
+                bool isCorrectPath = false;
+                if (p.Name.Equals("smss.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    // smss.exe kann in \SystemRoot\ oder C:\Windows\System32 liegen
+                    isCorrectPath = exePathLower.EndsWith("\\system32\\smss.exe");
+                }
+                else if (p.Name.Equals("csrss.exe", StringComparison.OrdinalIgnoreCase) ||
+                         p.Name.Equals("wininit.exe", StringComparison.OrdinalIgnoreCase) ||
+                         p.Name.Equals("lsass.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Die anderen müssen direkt in System32 liegen
+                    isCorrectPath = exePathLower.StartsWith(system32Path);
+                }
+
+                // 2. Signatur-Prüfung
+                bool isSignedByMicrosoft = (p.SignerName ?? "").Contains("Microsoft");
+
+                isLegitCritical = isCorrectPath && isSignedByMicrosoft;
+            }
+            else
+            {
+                // Details sind noch NICHT geladen.
+                // Wir verwenden die unsichere Namensprüfung als vorläufigen Platzhalter.
+                // Die Funktion wird erneut aufgerufen, sobald die Details via Service_ProcessUpdated eintreffen.
+                isLegitCritical = p.Name.Equals("csrss.exe", StringComparison.OrdinalIgnoreCase) ||
+                                  p.Name.Equals("wininit.exe", StringComparison.OrdinalIgnoreCase) ||
+                                  p.Name.Equals("lsass.exe", StringComparison.OrdinalIgnoreCase) ||
+                                  p.Name.Equals("smss.exe", StringComparison.OrdinalIgnoreCase);
+            }
+
+            // Finale Entscheidung: Ist der Prozess als kritisch markiert (p.IsMarkedCritical),
+            // aber unsere Prüfung sagt, er ist NICHT legitim?
+            if (p.IsMarkedCritical && !isLegitCritical)
+            {
+                // VERDÄCHTIG!
+                row.DefaultCellStyle.BackColor = Color.Red;
+                row.DefaultCellStyle.ForeColor = Color.White;
+            }
+            else
+            {
+                // Normal (oder ein legitim kritischer Prozess)
+                // Standard-Farben wiederherstellen (wichtig für DataGridView-Recycling)
+                if (row.Index % 2 == 0)
+                {
+                    row.DefaultCellStyle.BackColor = Color.White;
+                }
+                else
+                {
+                    // Farbe für alternierende Zeilen
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(240, 240, 240);
+                }
+                row.DefaultCellStyle.ForeColor = Color.Black;
+            }
+        }
         private async void ShowDotNetHeapForSelectedProcess()
         {
             var p = SelectedProcess;
@@ -554,6 +657,7 @@ namespace ProcessDemo
                 {
                     ResolveThreadAddresses(p);
                 }
+                CheckProcessCriticality(p); // Prüft den ausgewählten Prozess
             }
             else
             {
@@ -593,6 +697,8 @@ namespace ProcessDemo
             _menu.Items.Add("Show All Heap Strings", null, (s, e) => ShowDotNetAllHeapStrings_Click());
             _menu.Items.Add("Show .NET AppDomains/Assemblies", null, (s, e) => ShowDotNetAppDomains_Click());
             _menu.Items.Add("Show UWP Package Info (F3)", null, (s, e) => ShowUwpPackageInfo_Click());
+            _menu.Items.Add("-"); // Trennlinie
+            _menu.Items.Add("Check for Critical Flag", null, (s, e) => CheckProcessCriticality(SelectedProcess));
 
             _menuThread.Items.Add("Show Priorities (F7)", null, (s, e) => ShowPrioritiesForSelectedThread());
             _menuThread.Items.Add("Resolve Start Address (F8)", null, (s, e) => ResolveSelectedThreadAddress());
@@ -940,6 +1046,7 @@ namespace ProcessDemo
                 {
                     var newItem = new ProcessInfoViewModel(info);
                     _allProcessItems.Add(newItem);
+                    CheckProcessCriticality(newItem);
                 }
             }
             catch (Exception ex)
@@ -1007,6 +1114,7 @@ namespace ProcessDemo
             if (itemToUpdate != null)
             {
                 itemToUpdate.ApplyUpdate(info);
+                UpdateRowColorForCriticality(itemToUpdate);
             }
         }
         private void Service_ProcessVolatileUpdated(ProcessVolatileUpdate update)

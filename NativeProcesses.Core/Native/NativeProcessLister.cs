@@ -16,7 +16,14 @@ namespace NativeProcesses.Core.Native
         private const int SystemProcessInformation = 5;
         private const uint STATUS_INFO_LENGTH_MISMATCH = 0xC0000004;
         private const uint STATUS_SUCCESS = 0x00000000;
+        private const int SystemThreadInformation = 51;
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SYSTEM_THREAD_INFORMATION_CONTAINER
+        {
+            public ulong NumberOfThreads;
+            // Direkt hier folgt ein Array von SYSTEM_THREAD_INFORMATION
+        }
         public NativeProcessLister()
         {
         }
@@ -224,6 +231,71 @@ namespace NativeProcesses.Core.Native
                 }
             }
             return processes;
+        }
+        public HashSet<int> GetPidsFromThreadView()
+        {
+            var pids = new HashSet<int>();
+            uint returnLength = 0;
+            uint status;
+            IntPtr buffer = IntPtr.Zero;
+            uint bufferSize = 0;
+
+            try
+            {
+                do
+                {
+                    if (buffer != IntPtr.Zero)
+                    {
+                        Marshal.FreeHGlobal(buffer);
+                    }
+                    bufferSize = bufferSize == 0 ? 1024 * 1024 : bufferSize * 2;
+                    buffer = Marshal.AllocHGlobal((int)bufferSize);
+
+                    status = NtQuerySystemInformation(
+                        SystemThreadInformation,
+                        buffer,
+                        bufferSize,
+                        out returnLength);
+
+                    if (status == STATUS_INFO_LENGTH_MISMATCH)
+                    {
+                        bufferSize = returnLength;
+                    }
+                } while (status == STATUS_INFO_LENGTH_MISMATCH);
+
+                if (status != STATUS_SUCCESS)
+                {
+                    throw new System.ComponentModel.Win32Exception("NtQuerySystemInformation(SystemThreadInformation) failed with status: " + status);
+                }
+
+                var container = (SYSTEM_THREAD_INFORMATION_CONTAINER)Marshal.PtrToStructure(
+                    buffer,
+                    typeof(SYSTEM_THREAD_INFORMATION_CONTAINER));
+
+                long threadCount = (long)container.NumberOfThreads;
+                IntPtr currentPtr = IntPtr.Add(buffer, Marshal.SizeOf(typeof(ulong)));
+                int threadStructSize = Marshal.SizeOf(typeof(SYSTEM_THREAD_INFORMATION));
+
+                for (long i = 0; i < threadCount; i++)
+                {
+                    SYSTEM_THREAD_INFORMATION threadInfo =
+                        (SYSTEM_THREAD_INFORMATION)Marshal.PtrToStructure(
+                            currentPtr,
+                            typeof(SYSTEM_THREAD_INFORMATION));
+
+                    pids.Add((int)threadInfo.ClientId.UniqueProcess);
+
+                    currentPtr = IntPtr.Add(currentPtr, threadStructSize);
+                }
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+            return pids;
         }
     }
 }
