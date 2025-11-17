@@ -12,5 +12,7 @@ namespace NativeProcesses.Core.Inspection
         public string RegionType { get; set; }
         public string RegionProtection { get; set; }
         public string Status { get; set; } // z.B. "PE Header found at offset 0"
+        public bool RequiresHeaderReconstruction { get; set; }
+        public byte[] SuggestedHeaderFix { get; set; }
     }
 }

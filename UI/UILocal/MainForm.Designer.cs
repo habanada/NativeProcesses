@@ -163,6 +163,7 @@ namespace ProcessDemo
             this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
             this.Name = "MainForm";
             this.Text = "Processes: ";
+            this.Load += new System.EventHandler(this.MainForm_Load);
             this.Shown += new System.EventHandler(this.MainForm_Shown);
             this.panel1.ResumeLayout(false);
             this.panel4.ResumeLayout(false);

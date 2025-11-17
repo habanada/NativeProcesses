@@ -487,17 +487,22 @@ namespace NativeProcesses.Core.Native
                                             var hooks = inspector.CheckForInlineHooks(proc, mod.DllBase, mod.FullDllName, modules, regions);
                                             foreach (var hook in hooks)
                                             {
-                                                // Filter: Private/Unknown ist immer böse
+                                                // NEU: Nutze ResolveTargetAddress für bessere Analyse (Symbole!)
+                                                // Falls inspector.ResolveTargetAddress nicht public ist, mach es public in SecurityInspector.cs!
+                                                hook.TargetModule = inspector.ResolveTargetAddress(hook.TargetAddress, proc, modules, regions);
+
                                                 if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
                                                 {
                                                     inlineHooks.Add(hook);
                                                     continue;
                                                 }
 
-                                                // Filter: Signatur prüfen (Cached)
                                                 var sig = signatureCache.GetOrAdd(hook.TargetModule, (target) =>
                                                 {
-                                                    var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(target, StringComparison.OrdinalIgnoreCase));
+                                                    // TargetModule kann jetzt "kernel32.dll!CreateFile" sein. Wir brauchen nur den DLL-Teil.
+                                                    string dllName = target.Contains("!") ? target.Split('!')[0] : target;
+
+                                                    var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(dllName, StringComparison.OrdinalIgnoreCase));
                                                     if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
                                                         return SignatureVerifier.Verify(targetMod.FullDllName);
                                                     return null;
@@ -512,28 +517,33 @@ namespace NativeProcesses.Core.Native
                                         catch (Exception ex) { errors.Add($"Inline hook error {mod.BaseDllName}: {ex.Message}"); }
                                     }
 
-                                    // 3. IAT Hooks (HIER WAR DER FEHLER: Wir übergeben jetzt 'ntdllExports')
+                                    // 3. IAT Hooks
                                     if (flags.HasFlag(ScanFlags.IatHooks) && ntdllModule != null && ntdllExports.Count > 0)
                                     {
                                         try
                                         {
-                                            // FIX: Parameter ist jetzt 'ntdllExports' (Dictionary), nicht mehr 'ntdllModule.DllBase' (IntPtr)
                                             var hooks = inspector.CheckIatHooks(proc, mod.DllBase, mod.BaseDllName, ntdllExports, modules, regions);
 
                                             foreach (var hook in hooks)
                                             {
+                                                // NEU: Auch hier ResolveTargetAddress nutzen
+                                                hook.TargetModule = inspector.ResolveTargetAddress(hook.ActualAddress, proc, modules, regions);
+
                                                 if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
                                                 {
                                                     iatHooks.Add(hook);
                                                     continue;
                                                 }
+
                                                 var sig = signatureCache.GetOrAdd(hook.TargetModule, (target) =>
                                                 {
-                                                    var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(target, StringComparison.OrdinalIgnoreCase));
+                                                    string dllName = target.Contains("!") ? target.Split('!')[0] : target;
+                                                    var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(dllName, StringComparison.OrdinalIgnoreCase));
                                                     if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
                                                         return SignatureVerifier.Verify(targetMod.FullDllName);
                                                     return null;
                                                 });
+
                                                 if (sig == null || !trustedSigners.Contains(sig.SignerName))
                                                 {
                                                     iatHooks.Add(hook);

@@ -1411,6 +1411,18 @@ namespace ProcessDemo
             {
             }
         }
+
+        private void MainForm_Load(object sender, EventArgs e)
+        {
+            // Einmalig ausführen, um die Datei zu erstellen:
+            var initialSigs = new List<NativeProcesses.Core.Inspection.SignatureModel>
+            {
+                new NativeProcesses.Core.Inspection.SignatureModel { Name = "x64 PEB Access", PatternHex = "65488B042560000000", IsStrongIndicator = true },
+                new NativeProcesses.Core.Inspection.SignatureModel { Name = "CobaltStrike Beacon String", PatternString = "beacon.x64.dll", IsStringAscii = true, IsStrongIndicator = true },
+                new NativeProcesses.Core.Inspection.SignatureModel { Name = "Metasploit FPU GetPC", PatternHex = "D9EED97424F4", IsStrongIndicator = true }
+            };
+            NativeProcesses.Core.Inspection.SignatureLoader.SaveSignaturesEncrypted("signatures.dat", initialSigs);
+        }
     }
 
     public class ConsoleLogger : IEngineLogger

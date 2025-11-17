@@ -710,7 +710,7 @@ namespace NativeProcesses.Core.Inspection
                             {
                                 if (actualAddressInIat != expectedAddress)
                                 {
-                                    string targetModule = AttributeAddress(actualAddressInIat, allModules, regions);
+                                    string targetModule = ResolveTargetAddress(actualAddressInIat,process, allModules, regions);
                                     results.Add(new IatHookInfo
                                     {
                                         ModuleName = moduleToScanName,
@@ -726,7 +726,7 @@ namespace NativeProcesses.Core.Inspection
 
                         // Für andere DLLs (z.B. Kernel32 Forwarders):
                         // Wir prüfen, ob die Adresse zumindest in IRGENDEINER bekannten DLL liegt.
-                        string targetModName = AttributeAddress(actualAddressInIat, allModules, regions);
+                        string targetModName = ResolveTargetAddress(actualAddressInIat, process, allModules, regions);
 
                         if (targetModName.StartsWith("PRIVATE_MEMORY") || targetModName == "UNKNOWN_REGION")
                         {
@@ -799,7 +799,7 @@ namespace NativeProcesses.Core.Inspection
                             hookInfo.SectionName = ".text";
                             hookInfo.Offset = i;
 
-                            hookInfo.TargetModule = AttributeAddress(hookInfo.TargetAddress, modules, regions);
+                            hookInfo.TargetModule = ResolveTargetAddress(hookInfo.TargetAddress,process, modules, regions);
 
                             results.Add(hookInfo);
 
@@ -916,31 +916,41 @@ namespace NativeProcesses.Core.Inspection
                 TargetAddress = IntPtr.Zero
             };
         }
-        private string AttributeAddress(IntPtr targetAddress,
-                                        List<NativeProcesses.Core.Models.ProcessModuleInfo> modules,
-                                        List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
+        public string ResolveTargetAddress(IntPtr targetAddress,
+                                            Native.ManagedProcess process,
+                                            List<NativeProcesses.Core.Models.ProcessModuleInfo> modules,
+                                            List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
         {
-            if (targetAddress == IntPtr.Zero)
-            {
-                return "N/A";
-            }
+            if (targetAddress == IntPtr.Zero) return "N/A";
 
             long target = targetAddress.ToInt64();
 
-            // 1. Landet es in einem geladenen Modul? (Legitim / EDR)
+            // 1. Modul-Suche (Ist es in einer DLL?)
             foreach (var mod in modules)
             {
                 if (mod.DllBase == IntPtr.Zero || mod.SizeOfImage == 0) continue;
+
                 long start = mod.DllBase.ToInt64();
                 long end = start + mod.SizeOfImage;
 
                 if (target >= start && target < end)
                 {
-                    return mod.BaseDllName;
+                    // TREFFER: Es ist in diesem Modul.
+                    // Jetzt versuchen wir, das exakte Symbol zu finden (PE-sieve Style).
+                    string symbol = FindNearestExport(process, mod.DllBase, targetAddress);
+
+                    if (!string.IsNullOrEmpty(symbol))
+                    {
+                        return $"{mod.BaseDllName}!{symbol}";
+                    }
+
+                    // Fallback: Nur Offset, falls kein Export in der Nähe
+                    long offset = target - start;
+                    return $"{mod.BaseDllName}+0x{offset:X}";
                 }
             }
 
-            // 2. Landet es in privatem Speicher? (Shellcode!)
+            // 2. Memory-Region-Suche (Ist es Shellcode?)
             foreach (var region in regions)
             {
                 long regionStart = region.BaseAddress.ToInt64();
@@ -953,6 +963,48 @@ namespace NativeProcesses.Core.Inspection
             }
 
             return "UNKNOWN_REGION";
+        }
+
+        private string FindNearestExport(Native.ManagedProcess process, IntPtr moduleBase, IntPtr targetAddress)
+        {
+            try
+            {
+                // Wir nutzen deine existierende BuildExportMap Methode!
+                var exports = BuildExportMap(process, moduleBase);
+
+                string bestMatchName = "";
+                long smallestDelta = long.MaxValue;
+                long target = targetAddress.ToInt64();
+
+                foreach (var kvp in exports)
+                {
+                    long funcAddr = kvp.Value.ToInt64();
+
+                    // Das Symbol muss VOR oder GENAU AUF der Zieladresse liegen
+                    if (target >= funcAddr)
+                    {
+                        long delta = target - funcAddr;
+                        if (delta < smallestDelta)
+                        {
+                            smallestDelta = delta;
+                            bestMatchName = kvp.Key;
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(bestMatchName))
+                {
+                    if (smallestDelta == 0)
+                        return bestMatchName; // Exakter Treffer
+                    else
+                        return $"{bestMatchName}+0x{smallestDelta:X}"; // Offset Treffer (z.B. Hook mitten in Funktion)
+                }
+            }
+            catch
+            {
+                // Parsing fehlgeschlagen, wir geben null zurück -> Fallback auf Modul+Offset
+            }
+            return null;
         }
         public List<InlineHookInfo> CheckForInlineHooksFirstFoundBreak(Native.ManagedProcess process, IntPtr moduleBase, string modulePath)
         {
@@ -1117,73 +1169,165 @@ namespace NativeProcesses.Core.Inspection
         public List<FoundPeHeaderInfo> CheckDataRegionsForPeHeaders(Native.ManagedProcess process, List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
         {
             var results = new List<FoundPeHeaderInfo>();
-
             try
             {
-                // Wir scannen NUR private, committete Regionen.
-                // MEM_IMAGE  (legitime DLLs) und MEM_MAPPED (Speicher-Dateien) werden ignoriert.
                 var privateRegions = regions
-                    .Where(r => r.State == "Commit" &&
-                                r.Type == "Private")
+                    .Where(r => r.State == "Commit" && r.Type == "Private")
                     .ToList();
 
                 foreach (var region in privateRegions)
                 {
-                    // Wir müssen nicht die ganze Region lesen (kann GB groß sein).
-                    // Ein PE-Header muss am Anfang (Offset 0) der Region liegen.
-                    // Wir lesen die ersten 4096 Bytes (4KB), das reicht für alle Header.
+                    // Scan-Größe: Genug um PE Header zu finden (IcedID versteckt Header oft tief)
                     int bytesToRead = (int)Math.Min(region.RegionSize, 4096);
-                    if (bytesToRead < 1024) // Weniger als 1KB ist unwahrscheinlich für ein PE
-                    {
-                        continue;
-                    }
+                    if (bytesToRead < 512) continue;
 
                     byte[] buffer;
                     try
                     {
                         buffer = process.ReadMemory(region.BaseAddress, bytesToRead);
                     }
-                    catch (Exception)
-                    {
-                        continue; // Lesefehler (z.B. Konkurrenzsituation), Region überspringen
-                    }
-
-                    // 1. Suche nach "MZ"-Signatur  am Anfang
-                    if (buffer[0] != 0x4D || buffer[1] != 0x5A) // 'M' 'Z'
+                    catch
                     {
                         continue;
                     }
-
-                    // 2. Finde den "e_lfanew"  (Offset zum PE-Header)
-                    int e_lfanew = BitConverter.ToInt32(buffer, 0x3C);
-                    if (e_lfanew + 4 > buffer.Length)
+                    // --- (MALWARE FAMILY SCAN) ---
+                    var familyInfo = MalwareFamilyDetector.ScanMemoryBlock(buffer, region.BaseAddress);
+                    if (familyInfo != null)
                     {
-                        continue; // PE-Header liegt außerhalb unseres gelesenen Puffers
-                    }
-
-                    // 3. Suche nach "PE\0\0"-Signatur 
-                    if (buffer[e_lfanew] == 0x50 && buffer[e_lfanew + 1] == 0x45 &&
-                        buffer[e_lfanew + 2] == 0x00 && buffer[e_lfanew + 3] == 0x00)
-                    {
-                        // FUND! Ein PE-Header liegt im privaten Speicher .
                         results.Add(new FoundPeHeaderInfo
                         {
                             BaseAddress = region.BaseAddress,
                             RegionSize = region.RegionSize,
                             RegionType = region.Type,
                             RegionProtection = region.Protection,
-                            Status = $"PE Header found at offset 0 (RW/R-Only Memory)"
+                            Status = $"[FAMILY DETECTED] {familyInfo.FamilyName} ({familyInfo.Variant}) - {familyInfo.Details}",
+                            RequiresHeaderReconstruction = true // Meistens proprietäre Formate, die Fixes brauchen
+                        });
+                        // Wir brechen hier ab, da wir eine sehr spezifische Signatur gefunden haben
+                        goto NextRegion;
+                    }
+                    // --- HEURISTIK 1: Standard "MZ" ---
+                    if (buffer[0] == 0x4D && buffer[1] == 0x5A)
+                    {
+                        int e_lfanew = BitConverter.ToInt32(buffer, 0x3C);
+                        if (e_lfanew > 0 && e_lfanew < buffer.Length - 4)
+                        {
+                            if (buffer[e_lfanew] == 0x50 && buffer[e_lfanew + 1] == 0x45)
+                            {
+                                results.Add(new FoundPeHeaderInfo
+                                {
+                                    BaseAddress = region.BaseAddress,
+                                    RegionSize = region.RegionSize,
+                                    RegionType = region.Type,
+                                    RegionProtection = region.Protection,
+                                    Status = "Standard PE Header (MZ+PE)",
+                                    RequiresHeaderReconstruction = false
+                                });
+                                continue;
+                            }
+                        }
+                    }
+
+                    // --- HEURISTIK 2: "Headless" / IcedID (PE\0\0 ohne MZ) ---
+                    // Wir scannen nach der NT-Signatur (0x50, 0x45, 0, 0)
+                    // IcedID und andere Loader löschen den DOS-Header, brauchen aber den NT-Header.
+
+                    // Wir suchen in 4-Byte Schritten (Alignment)
+                    for (int i = 0; i < bytesToRead - 24; i += 4)
+                    {
+                        if (buffer[i] == 0x50 && buffer[i + 1] == 0x45 && buffer[i + 2] == 0x00 && buffer[i + 3] == 0x00)
+                        {
+                            // Validierung: Machine Type Check (Offset 4)
+                            // 0x14C = x86, 0x8664 = x64
+                            ushort machine = BitConverter.ToUInt16(buffer, i + 4);
+                            if (machine == 0x014c || machine == 0x8664)
+                            {
+                                // Validierung: SizeOfOptionalHeader (Offset 20) muss sinnvoll sein (>0, <256)
+                                ushort sizeOpt = BitConverter.ToUInt16(buffer, i + 20);
+                                if (sizeOpt > 0 && sizeOpt < 0xFF)
+                                {
+                                    // TREFFER: Verwaister NT-Header!
+                                    // Wir generieren einen Fake-DOS-Header, der auf diesen Offset zeigt.
+                                    byte[] fakeHeader = GenerateFakeDosHeader(i);
+
+                                    results.Add(new FoundPeHeaderInfo
+                                    {
+                                        BaseAddress = region.BaseAddress,
+                                        RegionSize = region.RegionSize,
+                                        RegionType = region.Type,
+                                        RegionProtection = region.Protection,
+                                        Status = $"Stripped PE Header (Found NT sig at 0x{i:X})",
+                                        RequiresHeaderReconstruction = true,
+                                        SuggestedHeaderFix = fakeHeader
+                                    });
+                                    goto NextRegion;
+                                }
+                            }
+                        }
+                    }
+
+                    // --- HEURISTIK 3: "Dense Pointer Block" (Shellcode IAT) ---
+                    // Wenn wir viele Pointer finden, die in den eigenen Speicherbereich zeigen, 
+                    // ist es oft eine VTable oder eine manuelle IAT von Shellcode.
+                    if (CalculatePointerDensity(buffer, region.BaseAddress, region.RegionSize) > 0.85)
+                    {
+                        results.Add(new FoundPeHeaderInfo
+                        {
+                            BaseAddress = region.BaseAddress,
+                            RegionSize = region.RegionSize,
+                            RegionType = region.Type,
+                            RegionProtection = region.Protection,
+                            Status = "High Density of Internal Pointers (Shellcode Table / Data)",
+                            RequiresHeaderReconstruction = false
                         });
                     }
+
+                    NextRegion:;
                 }
             }
             catch (Exception ex)
             {
-                _logger?.Log(LogLevel.Error, "SecurityInspector.CheckDataRegionsForPeHeaders failed.", ex);
+                _logger?.Log(LogLevel.Error, "CheckDataRegionsForPeHeaders failed", ex);
             }
             return results;
         }
 
+        private byte[] GenerateFakeDosHeader(int ntHeaderOffset)
+        {
+            // Baut einen validen DOS-Header, bei dem e_lfanew auf unseren gefundenen Offset zeigt.
+            byte[] dos = new byte[64]; // Standard DOS Stub Size
+            dos[0] = 0x4D; // M
+            dos[1] = 0x5A; // Z
+
+            // e_lfanew ist an Offset 0x3C
+            BitConverter.GetBytes(ntHeaderOffset).CopyTo(dos, 0x3C);
+
+            return dos;
+        }
+         private double CalculatePointerDensity(byte[] buffer, IntPtr baseAddress, long regionSize)
+        {
+            int ptrSize = IntPtr.Size;
+            long start = baseAddress.ToInt64();
+            long end = start + regionSize;
+            int validCount = 0;
+            int totalCount = 0;
+
+            for (int i = 0; i < buffer.Length - ptrSize; i += ptrSize)
+            {
+                long val;
+                if (ptrSize == 8) val = BitConverter.ToInt64(buffer, i);
+                else val = BitConverter.ToInt32(buffer, i);
+
+                if (val >= start && val < end) validCount++;
+                totalCount++;
+            }
+
+            if (totalCount == 0) return 0;
+            return (double)validCount / totalCount;
+        }
+
+
+        
         private IntPtr ReadIntPtr(Native.ManagedProcess process, IntPtr address, bool isWow64)
         {
             int ptrSize = isWow64 ? 4 : 8;
