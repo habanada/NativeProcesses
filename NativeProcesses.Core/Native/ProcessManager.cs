@@ -29,6 +29,7 @@ namespace NativeProcesses.Core.Native
         SuspiciousThreads = 8, // Threads ohne legitimes Modul
         SuspiciousMemory = 16, // RWX Speicher / Shellcode Pattern
         HiddenPeHeaders = 32,  // PE Header im privaten Speicher
+        DotNetMalware = 64, // <-- NEU: Flag für AgentTesla/NanoCore Scan
         All = Anomalies | InlineHooks | IatHooks | SuspiciousThreads | SuspiciousMemory | HiddenPeHeaders
     }
     public static class ProcessManager
@@ -42,7 +43,7 @@ namespace NativeProcesses.Core.Native
             High = 0x00000080,
             RealTime = 0x00000100
         }
-
+      
 
         public static Task<bool> DumpProcessMemoryRegionAsync(int pid, IntPtr baseAddress, long regionSize, string outputFilePath, IEngineLogger logger = null)
         {
@@ -379,13 +380,12 @@ namespace NativeProcesses.Core.Native
             int pid = processInfo.Pid;
             var result = new HookDetectionResult(pid);
 
-            // Thread-Safe Collections für Ergebnisse
+            // Thread-Safe Collections
             var iatHooks = new System.Collections.Concurrent.ConcurrentBag<SecurityInspector.IatHookInfo>();
             var inlineHooks = new System.Collections.Concurrent.ConcurrentBag<SecurityInspector.InlineHookInfo>();
             var anomalies = new System.Collections.Concurrent.ConcurrentBag<PeAnomalyInfo>();
             var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
 
-            // Collections für sequentiell gesammelte Daten
             var foundPeHeaders = new List<FoundPeHeaderInfo>();
             var suspiciousThreads = new List<SecurityInspector.SuspiciousThreadInfo>();
             var suspiciousRegions = new List<SecurityInspector.SuspiciousMemoryRegionInfo>();
@@ -397,12 +397,14 @@ namespace NativeProcesses.Core.Native
                 "Microsoft Corporation"
             };
 
-            var access = ProcessAccessFlags.QueryInformation | ProcessAccessFlags.VmRead | ProcessAccessFlags.QueryLimitedInformation;
+            var access = ProcessAccessFlags.QueryInformation |
+                         ProcessAccessFlags.VmRead |
+                         ProcessAccessFlags.QueryLimitedInformation |
+                         ProcessAccessFlags.DuplicateHandle; // Für Snapshot
 
             List<ProcessModuleInfo> modules;
             List<VirtualMemoryRegion> regions;
 
-            // 1. Metadaten laden (Timeout 5s)
             try
             {
                 var dataTask = Task.Run(async () =>
@@ -432,29 +434,56 @@ namespace NativeProcesses.Core.Native
                 result.Errors.Add("Failed to find ntdll.dll (required for IAT scan).");
             }
 
-            // 2. Scan im Hintergrund
             await Task.Run(() =>
             {
                 try
                 {
-                    using (var proc = new ManagedProcess(pid, access))
+                    // --- PROCESS REFLECTION (PSS SNAPSHOT) ---
+                    ProcessSnapshot snapshot = null;
+                    IntPtr scanHandle = IntPtr.Zero;
+                    bool useSnapshot = false;
+                    ManagedProcess procToScan = null;
+
+                    try
                     {
-                        // --- FIX: NTDLL Exports EINMAL laden (für den schnellen IAT Scan) ---
+                        using (var liveProc = new ManagedProcess(pid, access))
+                        {
+                            snapshot = new ProcessSnapshot(liveProc, logger);
+                            scanHandle = snapshot.CloneProcessHandle;
+                            useSnapshot = true;
+                            logger?.Log(LogLevel.Info, $"PSS Snapshot created for PID {pid}. Scanning clone.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.Log(LogLevel.Debug, $"PSS Snapshot failed for PID {pid} (Fallback to live scan): {ex.Message}");
+                    }
+
+                    if (useSnapshot)
+                    {
+                        // HIER WAR DER FEHLER: Argument 2 muss bool sein (ownsHandle), nicht ProcessAccessFlags!
+                        procToScan = new ManagedProcess(scanHandle, false);
+                    }
+                    else
+                    {
+                        procToScan = new ManagedProcess(pid, access);
+                    }
+
+                    using (procToScan)
+                    {
+                        // NTDLL Exports Cache
                         Dictionary<string, IntPtr> ntdllExports = new Dictionary<string, IntPtr>();
                         if (flags.HasFlag(ScanFlags.IatHooks) && ntdllModule != null)
                         {
                             try
                             {
                                 var preInspector = new SecurityInspector(logger);
-                                ntdllExports = preInspector.BuildExportMap(proc, ntdllModule.DllBase);
+                                ntdllExports = preInspector.BuildExportMap(procToScan, ntdllModule.DllBase);
                             }
-                            catch (Exception ex)
-                            {
-                                errors.Add($"Failed to build ntdll export map: {ex.Message}");
-                            }
+                            catch (Exception ex) { errors.Add($"Failed to build ntdll export map: {ex.Message}"); }
                         }
 
-                        // PARALLEL SCAN (Module-basiert)
+                        // PARALLEL SCAN
                         if (flags.HasFlag(ScanFlags.Anomalies) || flags.HasFlag(ScanFlags.InlineHooks) || flags.HasFlag(ScanFlags.IatHooks))
                         {
                             var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
@@ -468,12 +497,12 @@ namespace NativeProcesses.Core.Native
                                     var inspector = new SecurityInspector(logger);
                                     var anomalyScanner = new PeAnomalyScanner(logger);
 
-                                    // 1. Anomalies (Header Stomping etc.)
+                                    // 1. Anomalies
                                     if (flags.HasFlag(ScanFlags.Anomalies))
                                     {
                                         try
                                         {
-                                            var modsAnomalies = anomalyScanner.ScanModule(proc, mod);
+                                            var modsAnomalies = anomalyScanner.ScanModule(procToScan, mod);
                                             foreach (var a in modsAnomalies) anomalies.Add(a);
                                         }
                                         catch { }
@@ -484,12 +513,10 @@ namespace NativeProcesses.Core.Native
                                     {
                                         try
                                         {
-                                            var hooks = inspector.CheckForInlineHooks(proc, mod.DllBase, mod.FullDllName, modules, regions);
+                                            var hooks = inspector.CheckForInlineHooks(procToScan, mod.DllBase, mod.FullDllName, modules, regions);
                                             foreach (var hook in hooks)
                                             {
-                                                // NEU: Nutze ResolveTargetAddress für bessere Analyse (Symbole!)
-                                                // Falls inspector.ResolveTargetAddress nicht public ist, mach es public in SecurityInspector.cs!
-                                                hook.TargetModule = inspector.ResolveTargetAddress(hook.TargetAddress, proc, modules, regions);
+                                                hook.TargetModule = inspector.ResolveTargetAddress(hook.TargetAddress, procToScan, modules, regions);
 
                                                 if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
                                                 {
@@ -499,9 +526,7 @@ namespace NativeProcesses.Core.Native
 
                                                 var sig = signatureCache.GetOrAdd(hook.TargetModule, (target) =>
                                                 {
-                                                    // TargetModule kann jetzt "kernel32.dll!CreateFile" sein. Wir brauchen nur den DLL-Teil.
                                                     string dllName = target.Contains("!") ? target.Split('!')[0] : target;
-
                                                     var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(dllName, StringComparison.OrdinalIgnoreCase));
                                                     if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
                                                         return SignatureVerifier.Verify(targetMod.FullDllName);
@@ -522,12 +547,10 @@ namespace NativeProcesses.Core.Native
                                     {
                                         try
                                         {
-                                            var hooks = inspector.CheckIatHooks(proc, mod.DllBase, mod.BaseDllName, ntdllExports, modules, regions);
-
+                                            var hooks = inspector.CheckIatHooks(procToScan, mod.DllBase, mod.BaseDllName, ntdllExports, modules, regions);
                                             foreach (var hook in hooks)
                                             {
-                                                // NEU: Auch hier ResolveTargetAddress nutzen
-                                                hook.TargetModule = inspector.ResolveTargetAddress(hook.ActualAddress, proc, modules, regions);
+                                                hook.TargetModule = inspector.ResolveTargetAddress(hook.ActualAddress, procToScan, modules, regions);
 
                                                 if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
                                                 {
@@ -555,38 +578,83 @@ namespace NativeProcesses.Core.Native
                                 }
                                 catch { }
                             });
+
+                            // --- NEU: Process Doppelgänging / Module Overloading Check (Sequentiell) ---
+                            // Dieser Check ist sehr schnell, daher machen wir ihn hier.
+                            var inspectorOverload = new SecurityInspector(logger);
+                            try
+                            {
+                                var overloadResults = inspectorOverload.CheckForModuleOverloading(procToScan, modules);
+                                foreach (var overload in overloadResults)
+                                {
+                                    anomalies.Add(new PeAnomalyInfo
+                                    {
+                                        ModuleName = "System",
+                                        AnomalyType = "Module Overloading / Doppelgänging",
+                                        Details = overload,
+                                        Severity = "Critical"
+                                    });
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // logger?.Log(LogLevel.Error, "Module overloading check failed", ex);
+                            }
+
                         }
 
-                        // SEQUENTIELLE SCANS (Thread/Memory)
+                        // SEQUENTIELLE SCANS
                         var inspectorMain = new SecurityInspector(logger);
+                        try
+                        {
+                            var parentInspector = new ParentProcessInspector(logger);
+                            // Prüft Startzeiten und Parent-Beziehung auf Logikfehler
+                            var spoofingResult = parentInspector.CheckForParentSpoofing(pid, procToScan);
+                            if (spoofingResult != null)
+                            {
+                                anomalies.Add(spoofingResult);
+                            }
+                        }
+                        catch { }
 
                         if (flags.HasFlag(ScanFlags.SuspiciousThreads))
                         {
-                            try
-                            {
-                                suspiciousThreads.AddRange(inspectorMain.CheckForSuspiciousThreads(processInfo.Threads, modules, regions));
-                            }
-                            catch { }
+                            try { suspiciousThreads.AddRange(inspectorMain.CheckForSuspiciousThreads(processInfo.Threads, modules, regions)); } catch { }
                         }
-
                         if (flags.HasFlag(ScanFlags.SuspiciousMemory))
                         {
-                            try
-                            {
-                                suspiciousRegions.AddRange(inspectorMain.CheckForSuspiciousMemoryRegions(regions));
-                            }
-                            catch { }
+                            try { suspiciousRegions.AddRange(inspectorMain.CheckForSuspiciousMemoryRegions(regions)); } catch { }
                         }
-
                         if (flags.HasFlag(ScanFlags.HiddenPeHeaders))
+                        {
+                            try { foundPeHeaders.AddRange(inspectorMain.CheckDataRegionsForPeHeaders(procToScan, regions)); } catch { }
+                        }
+                        if (flags.HasFlag(ScanFlags.DotNetMalware))
                         {
                             try
                             {
-                                foundPeHeaders.AddRange(inspectorMain.CheckDataRegionsForPeHeaders(proc, regions));
+                                // Prüfen, ob es überhaupt .NET ist, bevor wir ClrMD laden
+                                bool isDotNet = modules.Any(m => m.BaseDllName.Equals("clr.dll", StringComparison.OrdinalIgnoreCase) ||
+                                                                 m.BaseDllName.Equals("coreclr.dll", StringComparison.OrdinalIgnoreCase));
+
+                                if (isDotNet)
+                                {
+                                    // Wir nutzen hier Task.Run, da ClrMD den Prozess kurzzeitig einfrieren kann
+                                    var dotNetResults = new DotNetMalwareScanner(logger).Scan(pid);
+                                    foreach (var finding in dotNetResults)
+                                    {
+                                        anomalies.Add(finding);
+                                    }
+                                }
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                // logger?.Log(LogLevel.Debug, "DotNetMalwareScanner skipped", ex);
+                            }
                         }
                     }
+
+                    snapshot?.Dispose();
                 }
                 catch (Exception ex)
                 {
@@ -594,7 +662,6 @@ namespace NativeProcesses.Core.Native
                 }
             });
 
-            // Ergebnisse übertragen
             result.IatHooks = iatHooks.ToList();
             result.InlineHooks = inlineHooks.ToList();
             result.Anomalies = anomalies.ToList();
@@ -604,9 +671,7 @@ namespace NativeProcesses.Core.Native
             result.Errors = errors.ToList();
 
             return result;
-        }
-        //public static Task<HookDetectionResult> ScanProcessForHooksAsync_nonparallel(FullProcessInfo processInfo, IEngineLogger logger = null)
-        //    {
+        }        //    {
         //        return Task.Run(async () =>
         //        {
         //            int pid = processInfo.Pid;

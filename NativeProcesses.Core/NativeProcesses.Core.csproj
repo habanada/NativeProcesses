@@ -216,10 +216,12 @@
     <Compile Include="Engine\ProcessVolatileUpdate.cs" />
     <Compile Include="Engine\SignatureLoader.cs" />
     <Compile Include="Inspection\DotNetInspector.cs" />
+    <Compile Include="Inspection\DotNetMalwareScanner.cs" />
     <Compile Include="Inspection\FoundPeHeaderInfo.cs" />
     <Compile Include="Inspection\HiddenProcessInfo.cs" />
     <Compile Include="Inspection\MalwareFamilyDetector.cs" />
     <Compile Include="Inspection\NativeHeapAllocationInfo.cs" />
+    <Compile Include="Inspection\ParentProcessInspector.cs" />
     <Compile Include="Inspection\PeAnomalyInfo.cs" />
     <Compile Include="Inspection\PeAnomalyScanner.cs" />
     <Compile Include="Inspection\PeReconstructor.cs" />
@@ -253,7 +255,9 @@
     <Compile Include="Native\NetworkManager.cs" />
     <Compile Include="Native\NtProcessInfoStructs.cs" />
     <Compile Include="Native\PebModuleEnumerator.cs" />
+    <Compile Include="Native\ProcessSnapshot.cs" />
     <Compile Include="Native\PsApiModuleEnumerator.cs" />
+    <Compile Include="Native\PssDefines.cs" />
     <Compile Include="Native\User32.cs" />
     <Compile Include="Native\WindowManager.cs" />
     <Compile Include="Inspection\PeStructs.cs" />

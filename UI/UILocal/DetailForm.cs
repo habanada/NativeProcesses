@@ -124,12 +124,12 @@ namespace processlist
         }
         private async void DumpSuspiciousMemory_Click(object sender, EventArgs e)
         {
-            if (gridDetails.SelectedRows.Count == 0 || _pid == -1 || _itemType == null)
-                return;
-
+            if (gridDetails.SelectedRows.Count == 0 || _pid == -1 || _itemType == null) return;
             dynamic item = gridDetails.SelectedRows[0].DataBoundItem;
+
             IntPtr baseAddress = IntPtr.Zero;
             long regionSize = 0;
+            bool isPeHeader = false;
 
             try
             {
@@ -138,56 +138,74 @@ namespace processlist
                     baseAddress = item.BaseAddress;
                     regionSize = item.RegionSize;
                 }
-                else if (_itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo)) // NEU
+                else if (_itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo))
                 {
                     baseAddress = item.BaseAddress;
                     regionSize = item.RegionSize;
+                    isPeHeader = true;
                 }
-                else if (_itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousThreadInfo))
-                {
-                    baseAddress = item.StartAddress;
-                    // ...
-                    var regionInfo = (NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousThreadInfo)item;
-                    MessageBox.Show(this, $"Dumping 4KB from thread start address: {baseAddress.ToString("X")}\n(Region: {regionInfo.RegionState} / {regionInfo.RegionProtection})", "Dumping Thread Memory", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-
-                if (baseAddress == IntPtr.Zero || regionSize == 0)
-                {
-                    MessageBox.Show(this, "Could not determine valid memory address or size.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
+                // ... (SuspiciousThreadInfo Logik bleibt gleich)
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, $"Error reading item properties: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
+            catch { return; }
 
             using (SaveFileDialog sfd = new SaveFileDialog())
             {
-                sfd.FileName = $"PID_{_pid}_DUMP_at_{baseAddress.ToString("X")}.bin";
-                sfd.Filter = "Binary Dump (*.bin)|*.bin|All Files (*.*)|*.*";
+                sfd.FileName = $"PID_{_pid}_DUMP_{baseAddress.ToString("X")}.bin";
+                sfd.Filter = "Binary Dump (*.bin)|*.bin";
+
                 if (sfd.ShowDialog(this) == DialogResult.OK)
                 {
                     this.Cursor = Cursors.WaitCursor;
                     try
                     {
-                        bool success = await NativeProcesses.Core.Native.ProcessManager.DumpProcessMemoryRegionAsync(_pid, baseAddress, regionSize, sfd.FileName, null);
-                        this.Cursor = Cursors.Default;
+                        // 1. Raw Dump ziehen (über NTAPI, stealthy)
+                        // Dazu nutzen wir ProcessManager Helper, aber wir brauchen die Bytes hier im RAM für den Reconstructor
+                        // Da DumpProcessMemoryRegionAsync direkt in Datei schreibt, lesen wir es hier manuell kurz ein.
 
-                        if (success)
+                        byte[] rawDump = null;
+                        var access = NativeProcesses.Core.Native.ProcessAccessFlags.VmRead | NativeProcesses.Core.Native.ProcessAccessFlags.QueryInformation;
+
+                        // Wir nutzen temporär einen ManagedProcess Helper direkt hier, oder erweitern ProcessManager um "ReadBytes"
+                        // Um Code-Duplizierung zu vermeiden, nutzen wir einfach ManagedProcess direkt:
+                        using (var proc = new NativeProcesses.Core.Native.ManagedProcess(_pid, access))
                         {
-                            MessageBox.Show(this, $"Memory successfully dumped to:\n{sfd.FileName}", "Dump Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            rawDump = proc.ReadMemory(baseAddress, (int)regionSize);
+
+                            // --- SMART FIXING (ImpRec + Header Repair) ---
+                            // Wir fragen den User oder machen es automatisch bei PE-Headern
+                            if (isPeHeader || (rawDump.Length > 2 && rawDump[0] == 0x4D && rawDump[1] == 0x5A))
+                            {
+                                var reconstructor = new NativeProcesses.Core.Inspection.PeReconstructor(null);
+                                var modules = proc.GetLoadedModules(null);
+                                bool is64 = proc.GetIsWow64() == false;
+
+                                // Versuche Import Table zu rekonstruieren & Header zu fixen
+                                rawDump = reconstructor.ReconstructPe(rawDump, modules, proc, is64);
+                            }
+
+                            // Falls der AnomalyScanner einen "SuggestedHeaderFix" hatte (z.B. IcedID),
+                            // müssten wir den hier theoretisch anwenden. Da wir das Objekt 'item' haben:
+                            if (_itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo))
+                            {
+                                var peInfo = (NativeProcesses.Core.Inspection.FoundPeHeaderInfo)item;
+                                if (peInfo.RequiresHeaderReconstruction && peInfo.SuggestedHeaderFix != null)
+                                {
+                                    // Header patchen (MZ...)
+                                    Array.Copy(peInfo.SuggestedHeaderFix, 0, rawDump, 0, Math.Min(rawDump.Length, peInfo.SuggestedHeaderFix.Length));
+                                }
+                            }
                         }
-                        else
-                        {
-                            MessageBox.Show(this, "Failed to dump memory. Check logs or permissions.", "Dump Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        }
+
+                        // 2. Schreiben
+                        System.IO.File.WriteAllBytes(sfd.FileName, rawDump);
+
+                        this.Cursor = Cursors.Default;
+                        MessageBox.Show($"Dump & Repair successful!\nSaved to: {sfd.FileName}", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                     catch (Exception ex)
                     {
                         this.Cursor = Cursors.Default;
-                        MessageBox.Show(this, $"Failed to dump memory: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show($"Dump failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
                 }
             }

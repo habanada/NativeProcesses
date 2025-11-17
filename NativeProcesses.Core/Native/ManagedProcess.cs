@@ -27,6 +27,29 @@ namespace NativeProcesses.Core.Native
         //private const int ProcessPowerThrottlingState = 45;
         //private const int ProcessIoPriority = 34;
         private const int ProcessBreakOnTermination = 29;
+        // NEU: Konstruktor für PSS Snapshot Handles (oder geerbte Handles)
+        // belongs inside ManagedProcess.cs
+        private bool _ownsHandle = true; // Default: Wir besitzen das Handle und schließen es
+
+        public ManagedProcess(IntPtr existingHandle, bool ownsHandle)
+        {
+            this.Pid = -1; // Pseudo-PID bei Snapshots
+            this.Handle = existingHandle;
+            this._ownsHandle = ownsHandle;
+        }
+
+        // WICHTIG: Update Dispose, damit wir Handles nicht schließen, die uns nicht gehören!
+        public void Dispose()
+        {
+            if (this.Handle != IntPtr.Zero)
+            {
+                if (_ownsHandle)
+                {
+                    CloseHandle(this.Handle);
+                }
+                this.Handle = IntPtr.Zero;
+            }
+        }
 
         #region P/Invoke Kernel32
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -541,14 +564,7 @@ namespace NativeProcesses.Core.Native
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
         }
-        public void Dispose()
-        {
-            if (this.Handle != IntPtr.Zero)
-            {
-                CloseHandle(this.Handle);
-                this.Handle = IntPtr.Zero;
-            }
-        }
+        
         #endregion
         #region Process Control
         public void HardKillUsingJob()

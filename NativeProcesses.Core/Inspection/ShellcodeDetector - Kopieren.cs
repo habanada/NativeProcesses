@@ -26,7 +26,6 @@
 //            }
 //        }
 
-//        // Erweiterte Datenbank basierend auf PE-sieve / SigFinder / Metasploit Patterns
 //        private static readonly List<ShellcodePattern> Patterns = new List<ShellcodePattern>
 //        {
 //            // --- PEB / TEB Access (Klassiker) ---
