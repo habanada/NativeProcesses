@@ -1,4 +1,8 @@
-﻿using NativeProcesses.Core.Engine;
+﻿/*
+   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using NativeProcesses.Core.Engine;
 using NativeProcesses.Core.Models;
 using System;
 using System.Collections.Generic;
@@ -163,6 +167,22 @@ namespace NativeProcesses.Core.Native
         private static extern bool EmptyWorkingSet(IntPtr hProcess);
         #endregion
         #region P/Invoke Ntdll
+        [DllImport("ntdll.dll", SetLastError = true)]
+        private static extern int NtReadVirtualMemory(
+            IntPtr ProcessHandle,
+            IntPtr BaseAddress,
+            [Out] byte[] Buffer,
+            uint NumberOfBytesToRead,
+            out uint NumberOfBytesRead);
+
+        [DllImport("ntdll.dll", SetLastError = true)]
+        private static extern int NtWriteVirtualMemory(
+            IntPtr ProcessHandle,
+            IntPtr BaseAddress,
+            byte[] Buffer,
+            uint NumberOfBytesToWrite,
+            out uint NumberOfBytesWritten);
+
         [DllImport("ntdll.dll", SetLastError = true)]
         private static extern uint NtSuspendProcess(IntPtr processHandle);
 
@@ -725,23 +745,42 @@ namespace NativeProcesses.Core.Native
         #endregion
 
         #region Memory
+        #region Memory
         public byte[] ReadMemory(IntPtr address, int size)
         {
             byte[] buffer = new byte[size];
-            if (!ReadProcessMemory(this.Handle, address, buffer, size, out int bytesRead) || bytesRead != size)
+
+            // Wir nutzen NTAPI statt Kernel32 ReadProcessMemory für mehr Stealth
+            int status = NtReadVirtualMemory(this.Handle, address, buffer, (uint)size, out uint bytesRead);
+
+            if (status != STATUS_SUCCESS || bytesRead != size)
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not read process memory.");
+                // Optional: Fallback auf ReadProcessMemory, falls NTAPI fehlschlägt (selten)
+                // Aber für einen Hunter ist ein Fehler hier oft aussagekräftig (Access Denied durch Treiber?)
+
+                // Wir werfen eine Exception nur bei echten Fehlern, um den Scan nicht hart crashen zu lassen,
+                // aber geben leere Daten zurück, wenn z.B. die Seite ausgelagert ist.
+
+                // throw new Win32Exception(Marshal.GetLastWin32Error(), $"NtReadVirtualMemory failed. Status: 0x{status:X}");
+
+                // Besser für Scan-Resilienz: Leeres Array oder Exception, je nach Strategie.
+                // Hier behalten wir die Exception bei, damit der Scanner weiß, dass er nichts lesen konnte.
+                throw new Win32Exception($"NtReadVirtualMemory failed at 0x{address.ToString("X")} with status 0x{status:X}");
             }
+
             return buffer;
         }
 
         public void WriteMemory(IntPtr address, byte[] data)
         {
-            if (!WriteProcessMemory(this.Handle, address, data, data.Length, out int bytesWritten) || bytesWritten != data.Length)
+            int status = NtWriteVirtualMemory(this.Handle, address, data, (uint)data.Length, out uint bytesWritten);
+
+            if (status != STATUS_SUCCESS || bytesWritten != data.Length)
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not write process memory.");
+                throw new Win32Exception($"NtWriteVirtualMemory failed at 0x{address.ToString("X")} with status 0x{status:X}");
             }
         }
+        #endregion
         #endregion
 
         #region Process Info (Fast)

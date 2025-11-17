@@ -1,4 +1,8 @@
-﻿using Microsoft.Diagnostics.Runtime;
+﻿/*
+   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using Microsoft.Diagnostics.Runtime;
 using NativeProcesses.Core.Models;
 using System;
 using System.Collections.Generic;

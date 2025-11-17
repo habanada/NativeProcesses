@@ -1,4 +1,8 @@
-﻿using System;
+﻿/*
+   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using System;
 using System.Runtime.InteropServices;
 
 namespace NativeProcesses.Core.Native

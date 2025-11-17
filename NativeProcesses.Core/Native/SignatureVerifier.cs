@@ -223,7 +223,6 @@ namespace NativeProcesses.Core.Native
 
             return info;
         }
-
         private static string GetSignerName(string filePath)
         {
             IntPtr pFilePath = Marshal.StringToCoTaskMemUni(filePath);

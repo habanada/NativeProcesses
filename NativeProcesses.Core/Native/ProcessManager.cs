@@ -19,6 +19,18 @@ using System.Collections.Generic;
 
 namespace NativeProcesses.Core.Native
 {
+    [Flags]
+    public enum ScanFlags
+    {
+        None = 0,
+        Anomalies = 1,         // Header Stomping, Phantom Sections (PeAnomalyScanner)
+        InlineHooks = 2,       // .text Sektions-Vergleich (Inline Hooks)
+        IatHooks = 4,          // Import Address Table Hooks
+        SuspiciousThreads = 8, // Threads ohne legitimes Modul
+        SuspiciousMemory = 16, // RWX Speicher / Shellcode Pattern
+        HiddenPeHeaders = 32,  // PE Header im privaten Speicher
+        All = Anomalies | InlineHooks | IatHooks | SuspiciousThreads | SuspiciousMemory | HiddenPeHeaders
+    }
     public static class ProcessManager
     {
         public enum PriorityClass : uint
@@ -197,12 +209,12 @@ namespace NativeProcesses.Core.Native
                 return results;
             });
         }        //public static Task<List<HiddenProcessInfo>> ScanForHiddenProcessesAsync(IEngineLogger logger = null, int maxPid = 65536)
-        //{
-        //    return Task.Run(() =>
-        //    {
-        //        var results = new List<HiddenProcessInfo>();
-        //        var lister = new NativeProcessLister(logger);
-        //        HashSet<int> officialPids;
+                 //{
+                 //    return Task.Run(() =>
+                 //    {
+                 //        var results = new List<HiddenProcessInfo>();
+                 //        var lister = new NativeProcessLister(logger);
+                 //        HashSet<int> officialPids;
 
         //        try
         //        {
@@ -362,169 +374,438 @@ namespace NativeProcesses.Core.Native
         //        return result;
         //    });
         //}
-        public static Task<HookDetectionResult> ScanProcessForHooksAsync(FullProcessInfo processInfo, IEngineLogger logger = null)
+        public static async Task<HookDetectionResult> ScanProcessForHooksAsync(FullProcessInfo processInfo, ScanFlags flags = ScanFlags.All, IEngineLogger logger = null)
         {
-            return Task.Run(async () =>
+            int pid = processInfo.Pid;
+            var result = new HookDetectionResult(pid);
+
+            // Thread-Safe Collections für Ergebnisse
+            var iatHooks = new System.Collections.Concurrent.ConcurrentBag<SecurityInspector.IatHookInfo>();
+            var inlineHooks = new System.Collections.Concurrent.ConcurrentBag<SecurityInspector.InlineHookInfo>();
+            var anomalies = new System.Collections.Concurrent.ConcurrentBag<PeAnomalyInfo>();
+            var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+            // Collections für sequentiell gesammelte Daten
+            var foundPeHeaders = new List<FoundPeHeaderInfo>();
+            var suspiciousThreads = new List<SecurityInspector.SuspiciousThreadInfo>();
+            var suspiciousRegions = new List<SecurityInspector.SuspiciousMemoryRegionInfo>();
+
+            var signatureCache = new System.Collections.Concurrent.ConcurrentDictionary<string, ProcessSignatureInfo>();
+            var trustedSigners = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                int pid = processInfo.Pid;
-                var result = new HookDetectionResult(pid);
-                var inspector = new SecurityInspector(logger);
-                var access = ProcessAccessFlags.QueryInformation | ProcessAccessFlags.VmRead | ProcessAccessFlags.QueryLimitedInformation;
+                "Microsoft Windows",
+                "Microsoft Corporation"
+            };
 
-                List<ProcessModuleInfo> modules;
-                List<VirtualMemoryRegion> regions;
+            var access = ProcessAccessFlags.QueryInformation | ProcessAccessFlags.VmRead | ProcessAccessFlags.QueryLimitedInformation;
 
+            List<ProcessModuleInfo> modules;
+            List<VirtualMemoryRegion> regions;
+
+            // 1. Metadaten laden (Timeout 5s)
+            try
+            {
+                var dataTask = Task.Run(async () =>
+                {
+                    var m = await GetModulesAsync(pid, logger);
+                    var r = await GetVirtualMemoryRegionsAsync(pid, logger);
+                    return (m, r);
+                });
+
+                if (await Task.WhenAny(dataTask, Task.Delay(5000)) != dataTask)
+                {
+                    result.Errors.Add("Timeout fetching modules/memory regions.");
+                    return result;
+                }
+
+                (modules, regions) = await dataTask;
+            }
+            catch (Exception ex)
+            {
+                result.Errors.Add($"Failed to list modules or memory regions: {ex.Message}");
+                return result;
+            }
+
+            var ntdllModule = modules.FirstOrDefault(m => m.BaseDllName.Equals("ntdll.dll", StringComparison.OrdinalIgnoreCase));
+            if (ntdllModule == null && flags.HasFlag(ScanFlags.IatHooks))
+            {
+                result.Errors.Add("Failed to find ntdll.dll (required for IAT scan).");
+            }
+
+            // 2. Scan im Hintergrund
+            await Task.Run(() =>
+            {
                 try
                 {
-                    modules = await GetModulesAsync(pid, logger);
-                    regions = await GetVirtualMemoryRegionsAsync(pid, logger);
+                    using (var proc = new ManagedProcess(pid, access))
+                    {
+                        // --- FIX: NTDLL Exports EINMAL laden (für den schnellen IAT Scan) ---
+                        Dictionary<string, IntPtr> ntdllExports = new Dictionary<string, IntPtr>();
+                        if (flags.HasFlag(ScanFlags.IatHooks) && ntdllModule != null)
+                        {
+                            try
+                            {
+                                var preInspector = new SecurityInspector(logger);
+                                ntdllExports = preInspector.BuildExportMap(proc, ntdllModule.DllBase);
+                            }
+                            catch (Exception ex)
+                            {
+                                errors.Add($"Failed to build ntdll export map: {ex.Message}");
+                            }
+                        }
+
+                        // PARALLEL SCAN (Module-basiert)
+                        if (flags.HasFlag(ScanFlags.Anomalies) || flags.HasFlag(ScanFlags.InlineHooks) || flags.HasFlag(ScanFlags.IatHooks))
+                        {
+                            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
+
+                            Parallel.ForEach(modules, parallelOptions, mod =>
+                            {
+                                if (string.IsNullOrEmpty(mod.FullDllName) || mod.FullDllName.StartsWith("[")) return;
+
+                                try
+                                {
+                                    var inspector = new SecurityInspector(logger);
+                                    var anomalyScanner = new PeAnomalyScanner(logger);
+
+                                    // 1. Anomalies (Header Stomping etc.)
+                                    if (flags.HasFlag(ScanFlags.Anomalies))
+                                    {
+                                        try
+                                        {
+                                            var modsAnomalies = anomalyScanner.ScanModule(proc, mod);
+                                            foreach (var a in modsAnomalies) anomalies.Add(a);
+                                        }
+                                        catch { }
+                                    }
+
+                                    // 2. Inline Hooks
+                                    if (flags.HasFlag(ScanFlags.InlineHooks))
+                                    {
+                                        try
+                                        {
+                                            var hooks = inspector.CheckForInlineHooks(proc, mod.DllBase, mod.FullDllName, modules, regions);
+                                            foreach (var hook in hooks)
+                                            {
+                                                // Filter: Private/Unknown ist immer böse
+                                                if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
+                                                {
+                                                    inlineHooks.Add(hook);
+                                                    continue;
+                                                }
+
+                                                // Filter: Signatur prüfen (Cached)
+                                                var sig = signatureCache.GetOrAdd(hook.TargetModule, (target) =>
+                                                {
+                                                    var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(target, StringComparison.OrdinalIgnoreCase));
+                                                    if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
+                                                        return SignatureVerifier.Verify(targetMod.FullDllName);
+                                                    return null;
+                                                });
+
+                                                if (sig == null || !trustedSigners.Contains(sig.SignerName))
+                                                {
+                                                    inlineHooks.Add(hook);
+                                                }
+                                            }
+                                        }
+                                        catch (Exception ex) { errors.Add($"Inline hook error {mod.BaseDllName}: {ex.Message}"); }
+                                    }
+
+                                    // 3. IAT Hooks (HIER WAR DER FEHLER: Wir übergeben jetzt 'ntdllExports')
+                                    if (flags.HasFlag(ScanFlags.IatHooks) && ntdllModule != null && ntdllExports.Count > 0)
+                                    {
+                                        try
+                                        {
+                                            // FIX: Parameter ist jetzt 'ntdllExports' (Dictionary), nicht mehr 'ntdllModule.DllBase' (IntPtr)
+                                            var hooks = inspector.CheckIatHooks(proc, mod.DllBase, mod.BaseDllName, ntdllExports, modules, regions);
+
+                                            foreach (var hook in hooks)
+                                            {
+                                                if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
+                                                {
+                                                    iatHooks.Add(hook);
+                                                    continue;
+                                                }
+                                                var sig = signatureCache.GetOrAdd(hook.TargetModule, (target) =>
+                                                {
+                                                    var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(target, StringComparison.OrdinalIgnoreCase));
+                                                    if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
+                                                        return SignatureVerifier.Verify(targetMod.FullDllName);
+                                                    return null;
+                                                });
+                                                if (sig == null || !trustedSigners.Contains(sig.SignerName))
+                                                {
+                                                    iatHooks.Add(hook);
+                                                }
+                                            }
+                                        }
+                                        catch (Exception ex) { errors.Add($"IAT hook error {mod.BaseDllName}: {ex.Message}"); }
+                                    }
+                                }
+                                catch { }
+                            });
+                        }
+
+                        // SEQUENTIELLE SCANS (Thread/Memory)
+                        var inspectorMain = new SecurityInspector(logger);
+
+                        if (flags.HasFlag(ScanFlags.SuspiciousThreads))
+                        {
+                            try
+                            {
+                                suspiciousThreads.AddRange(inspectorMain.CheckForSuspiciousThreads(processInfo.Threads, modules, regions));
+                            }
+                            catch { }
+                        }
+
+                        if (flags.HasFlag(ScanFlags.SuspiciousMemory))
+                        {
+                            try
+                            {
+                                suspiciousRegions.AddRange(inspectorMain.CheckForSuspiciousMemoryRegions(regions));
+                            }
+                            catch { }
+                        }
+
+                        if (flags.HasFlag(ScanFlags.HiddenPeHeaders))
+                        {
+                            try
+                            {
+                                foundPeHeaders.AddRange(inspectorMain.CheckDataRegionsForPeHeaders(proc, regions));
+                            }
+                            catch { }
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
-                    result.Errors.Add($"Failed to list modules or memory regions: {ex.Message}");
-                    return result;
+                    result.Errors.Add($"Fatal error during scan logic: {ex.Message}");
+                }
+            });
+
+            // Ergebnisse übertragen
+            result.IatHooks = iatHooks.ToList();
+            result.InlineHooks = inlineHooks.ToList();
+            result.Anomalies = anomalies.ToList();
+            result.SuspiciousThreads = suspiciousThreads;
+            result.SuspiciousMemoryRegions = suspiciousRegions;
+            result.FoundPeHeaders = foundPeHeaders;
+            result.Errors = errors.ToList();
+
+            return result;
+        }
+        //public static Task<HookDetectionResult> ScanProcessForHooksAsync_nonparallel(FullProcessInfo processInfo, IEngineLogger logger = null)
+        //    {
+        //        return Task.Run(async () =>
+        //        {
+        //            int pid = processInfo.Pid;
+        //            var result = new HookDetectionResult(pid);
+        //            var inspector = new SecurityInspector(logger);
+        //            var access = ProcessAccessFlags.QueryInformation | ProcessAccessFlags.VmRead | ProcessAccessFlags.QueryLimitedInformation;
+        //            var anomalyScanner = new PeAnomalyScanner(logger);
+
+        //            List<ProcessModuleInfo> modules;
+        //            List<VirtualMemoryRegion> regions;
+
+        //            try
+        //            {
+        //                modules = await GetModulesAsync(pid, logger);
+        //                regions = await GetVirtualMemoryRegionsAsync(pid, logger);
+        //            }
+        //            catch (Exception ex)
+        //            {
+        //                result.Errors.Add($"Failed to list modules or memory regions: {ex.Message}");
+        //                return result;
+        //            }
+
+        //            var ntdllModule = modules.FirstOrDefault(m => m.BaseDllName.Equals("ntdll.dll", StringComparison.OrdinalIgnoreCase));
+        //            if (ntdllModule == null)
+        //            {
+        //                result.Errors.Add("Failed to find ntdll.dll in the process.");
+        //                return result;
+        //            }
+
+        //            // --- START DER MIGNORE-LOGIK (SCHRITT 20.1) ---
+
+        //            // Der Cache, um zu vermeiden, dass "defender.dll" 100x verifiziert wird
+        //            var signatureCache = new Dictionary<string, ProcessSignatureInfo>();
+
+        //            // Unsere "Allow-List". Wir vertrauen nur Microsoft.
+        //            var trustedSigners = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        //            {
+        //                "Microsoft Windows",
+        //                "Microsoft Corporation"
+        //            };
+
+        //            using (var proc = new ManagedProcess(pid, access))
+        //            {
+        //                // --- 1. Inline-Hooks Scannen & Filtern ---
+        //                foreach (var mod in modules)
+        //                {
+        //                    if (string.IsNullOrEmpty(mod.FullDllName) || mod.FullDllName.StartsWith("[")) continue;
+
+        //                    try
+        //                    {
+        //                        var allInlineHooks = inspector.CheckForInlineHooks(proc, mod.DllBase, mod.FullDllName, modules, regions);
+        //                        foreach (var hook in allInlineHooks)
+        //                        {
+        //                            try
+        //                            {
+        //                                var anomalies = anomalyScanner.ScanModule(proc, mod);
+        //                                result.Anomalies.AddRange(anomalies);
+        //                            }
+        //                            catch (Exception ex)
+        //                            {
+        //                                logger?.Log(LogLevel.Debug, $"Anomaly scan error for {mod.BaseDllName}", ex);
+        //                            }
+
+        //                            // Shellcode  / Unbekannt wird SOFORT gemeldet
+        //                            if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
+        //                            {
+        //                                result.InlineHooks.Add(hook);
+        //                                continue;
+        //                            }
+
+        //                            // Es ist ein Hook  auf ein Modul (z.B. "defender.dll"). Prüfe die Signatur.
+        //                            if (!signatureCache.TryGetValue(hook.TargetModule, out ProcessSignatureInfo sig))
+        //                            {
+        //                                var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(hook.TargetModule, StringComparison.OrdinalIgnoreCase));
+        //                                if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
+        //                                {
+        //                                    sig = SignatureVerifier.Verify(targetMod.FullDllName);
+        //                                    signatureCache[hook.TargetModule] = sig;
+        //                                }
+        //                            }
+
+        //                            // Filter-Anwendung: Melde es NUR, wenn der Signierer NICHT vertrauenswürdig ist.
+        //                            if (sig == null || !trustedSigners.Contains(sig.SignerName))
+        //                            {
+        //                                result.InlineHooks.Add(hook);
+        //                            }
+        //                        }
+        //                    }
+        //                    catch (Exception ex)
+        //                    {
+        //                        result.Errors.Add($"Error scanning {mod.BaseDllName} for inline hooks: {ex.Message}");
+        //                    }
+
+        //                    // --- 2. IAT-Hooks Scannen & Filtern ---
+        //                    try
+        //                    {
+        //                        var allIatHooks = inspector.CheckIatHooks(proc, mod.DllBase, mod.BaseDllName, ntdllModule.DllBase, modules, regions);
+        //                        foreach (var hook in allIatHooks)
+        //                        {
+        //                            // IAT-Hooks  können nicht auf privaten Speicher zeigen (das wäre Shellcode ).
+        //                            // Wir müssen nur das Ziel-Modul verifizieren.
+        //                            if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
+        //                            {
+        //                                result.IatHooks.Add(hook);
+        //                                continue;
+        //                            }
+
+        //                            if (!signatureCache.TryGetValue(hook.TargetModule, out ProcessSignatureInfo sig))
+        //                            {
+        //                                var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(hook.TargetModule, StringComparison.OrdinalIgnoreCase));
+        //                                if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
+        //                                {
+        //                                    sig = SignatureVerifier.Verify(targetMod.FullDllName);
+        //                                    signatureCache[hook.TargetModule] = sig;
+        //                                }
+        //                            }
+
+        //                            if (sig == null || !trustedSigners.Contains(sig.SignerName))
+        //                            {
+        //                                result.IatHooks.Add(hook);
+        //                            }
+        //                        }
+        //                    }
+        //                    catch (Exception ex)
+        //                    {
+        //                        result.Errors.Add($"Error scanning {mod.BaseDllName} for IAT hooks: {ex.Message}");
+        //                    }
+        //                }
+
+        //                // --- 3. Suspicious Threads (Immer melden) ---
+        //                try
+        //                {
+        //                    var suspiciousThreads = inspector.CheckForSuspiciousThreads(processInfo.Threads, modules, regions);
+        //                    if (suspiciousThreads.Count > 0)
+        //                    {
+        //                        result.SuspiciousThreads.AddRange(suspiciousThreads);
+        //                    }
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    result.Errors.Add($"Error scanning for suspicious threads: {ex.Message}");
+        //                }
+
+        //                // --- 4. Suspicious Memory Regions (Immer melden) ---
+        //                try
+        //                {
+        //                    var suspiciousRegions = inspector.CheckForSuspiciousMemoryRegions(regions);
+        //                    if (suspiciousRegions.Count > 0)
+        //                    {
+        //                        result.SuspiciousMemoryRegions.AddRange(suspiciousRegions);
+        //                    }
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    result.Errors.Add($"Error scanning for suspicious memory regions: {ex.Message}");
+        //                }
+
+        //                // --- 5. Data Scan / PE Headers (Immer melden) ---
+        //                try
+        //                {
+        //                    var peHeaders = inspector.CheckDataRegionsForPeHeaders(proc, regions);
+        //                    if (peHeaders.Count > 0)
+        //                    {
+        //                        result.FoundPeHeaders.AddRange(peHeaders);
+        //                    }
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    result.Errors.Add($"Error scanning data regions for PE headers: {ex.Message}");
+        //                }
+        //            }
+        //            return result;
+        //        });
+        //    }
+        public static Task<List<PeAnomalyInfo>> ScanProcessForAnomaliesAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(async () =>
+            {
+                var results = new List<PeAnomalyInfo>();
+                var scanner = new PeAnomalyScanner(logger);
+
+                // Wir benötigen vollen Lesezugriff
+                var access = ProcessAccessFlags.QueryInformation | ProcessAccessFlags.VmRead;
+
+                try
+                {
+                    // Module holen
+                    var modules = await GetModulesAsync(pid, logger);
+
+                    using (var proc = new ManagedProcess(pid, access))
+                    {
+                        foreach (var mod in modules)
+                        {
+                            // System-Module oder leere Pfade überspringen wir ggf. nicht, 
+                            // da Malware sich oft als solche tarnt. Aber [Unknown] überspringen wir.
+                            if (string.IsNullOrEmpty(mod.FullDllName) || mod.FullDllName.StartsWith("["))
+                                continue;
+
+                            var modAnomalies = scanner.ScanModule(proc, mod);
+                            results.AddRange(modAnomalies);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger?.Log(LogLevel.Error, $"ScanProcessForAnomaliesAsync failed for PID {pid}.", ex);
                 }
 
-                var ntdllModule = modules.FirstOrDefault(m => m.BaseDllName.Equals("ntdll.dll", StringComparison.OrdinalIgnoreCase));
-                if (ntdllModule == null)
-                {
-                    result.Errors.Add("Failed to find ntdll.dll in the process.");
-                    return result;
-                }
-
-                // --- START DER MIGNORE-LOGIK (SCHRITT 20.1) ---
-
-                // Der Cache, um zu vermeiden, dass "defender.dll" 100x verifiziert wird
-                var signatureCache = new Dictionary<string, ProcessSignatureInfo>();
-
-                // Unsere "Allow-List". Wir vertrauen nur Microsoft.
-                var trustedSigners = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    "Microsoft Windows",
-                    "Microsoft Corporation"
-                };
-
-                using (var proc = new ManagedProcess(pid, access))
-                {
-                    // --- 1. Inline-Hooks Scannen & Filtern ---
-                    foreach (var mod in modules)
-                    {
-                        if (string.IsNullOrEmpty(mod.FullDllName) || mod.FullDllName.StartsWith("[")) continue;
-
-                        try
-                        {
-                            var allInlineHooks = inspector.CheckForInlineHooks(proc, mod.DllBase, mod.FullDllName, modules, regions);
-                            foreach (var hook in allInlineHooks)
-                            {
-                                // Shellcode  / Unbekannt wird SOFORT gemeldet
-                                if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
-                                {
-                                    result.InlineHooks.Add(hook);
-                                    continue;
-                                }
-
-                                // Es ist ein Hook  auf ein Modul (z.B. "defender.dll"). Prüfe die Signatur.
-                                if (!signatureCache.TryGetValue(hook.TargetModule, out ProcessSignatureInfo sig))
-                                {
-                                    var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(hook.TargetModule, StringComparison.OrdinalIgnoreCase));
-                                    if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
-                                    {
-                                        sig = SignatureVerifier.Verify(targetMod.FullDllName);
-                                        signatureCache[hook.TargetModule] = sig;
-                                    }
-                                }
-
-                                // Filter-Anwendung: Melde es NUR, wenn der Signierer NICHT vertrauenswürdig ist.
-                                if (sig == null || !trustedSigners.Contains(sig.SignerName))
-                                {
-                                    result.InlineHooks.Add(hook);
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            result.Errors.Add($"Error scanning {mod.BaseDllName} for inline hooks: {ex.Message}");
-                        }
-
-                        // --- 2. IAT-Hooks Scannen & Filtern ---
-                        try
-                        {
-                            var allIatHooks = inspector.CheckIatHooks(proc, mod.DllBase, mod.BaseDllName, ntdllModule.DllBase, modules, regions);
-                            foreach (var hook in allIatHooks)
-                            {
-                                // IAT-Hooks  können nicht auf privaten Speicher zeigen (das wäre Shellcode ).
-                                // Wir müssen nur das Ziel-Modul verifizieren.
-                                if (hook.TargetModule.StartsWith("PRIVATE_MEMORY") || hook.TargetModule == "UNKNOWN_REGION")
-                                {
-                                    result.IatHooks.Add(hook);
-                                    continue;
-                                }
-
-                                if (!signatureCache.TryGetValue(hook.TargetModule, out ProcessSignatureInfo sig))
-                                {
-                                    var targetMod = modules.FirstOrDefault(m => m.BaseDllName.Equals(hook.TargetModule, StringComparison.OrdinalIgnoreCase));
-                                    if (targetMod != null && !string.IsNullOrEmpty(targetMod.FullDllName))
-                                    {
-                                        sig = SignatureVerifier.Verify(targetMod.FullDllName);
-                                        signatureCache[hook.TargetModule] = sig;
-                                    }
-                                }
-
-                                if (sig == null || !trustedSigners.Contains(sig.SignerName))
-                                {
-                                    result.IatHooks.Add(hook);
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            result.Errors.Add($"Error scanning {mod.BaseDllName} for IAT hooks: {ex.Message}");
-                        }
-                    }
-
-                    // --- 3. Suspicious Threads (Immer melden) ---
-                    try
-                    {
-                        var suspiciousThreads = inspector.CheckForSuspiciousThreads(processInfo.Threads, modules, regions);
-                        if (suspiciousThreads.Count > 0)
-                        {
-                            result.SuspiciousThreads.AddRange(suspiciousThreads);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        result.Errors.Add($"Error scanning for suspicious threads: {ex.Message}");
-                    }
-
-                    // --- 4. Suspicious Memory Regions (Immer melden) ---
-                    try
-                    {
-                        var suspiciousRegions = inspector.CheckForSuspiciousMemoryRegions(regions);
-                        if (suspiciousRegions.Count > 0)
-                        {
-                            result.SuspiciousMemoryRegions.AddRange(suspiciousRegions);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        result.Errors.Add($"Error scanning for suspicious memory regions: {ex.Message}");
-                    }
-
-                    // --- 5. Data Scan / PE Headers (Immer melden) ---
-                    try
-                    {
-                        var peHeaders = inspector.CheckDataRegionsForPeHeaders(proc, regions);
-                        if (peHeaders.Count > 0)
-                        {
-                            result.FoundPeHeaders.AddRange(peHeaders);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        result.Errors.Add($"Error scanning data regions for PE headers: {ex.Message}");
-                    }
-                }
-                return result;
+                return results;
             });
         }
         public static bool TrimWorkingSet(int pid)

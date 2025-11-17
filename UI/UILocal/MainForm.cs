@@ -1,4 +1,8 @@
-﻿using NativeProcesses.Core;
+﻿/*
+   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using NativeProcesses.Core;
 using NativeProcesses.Core.Engine;
 using NativeProcesses.Core.Native;
 using NativeProcesses.Core;
@@ -12,6 +16,7 @@ using System.Linq;
 using System.Windows.Forms;
 using NativeProcesses.Core.Models;
 using System.Threading.Tasks;
+using NativeProcesses.Core.Inspection;
 
 namespace ProcessDemo
 {
@@ -713,51 +718,80 @@ namespace ProcessDemo
             var p = SelectedProcess;
             if (p == null) return;
 
+            // HIER KANNST DU STEUERN, WAS GETESTET WIRD:
+            // Z.B. nur Anomalies und Memory:
+            // ScanFlags activeFlags = ScanFlags.Anomalies | ScanFlags.SuspiciousMemory;
+
+            // Oder alles (Standard):
+            ScanFlags activeFlags = ScanFlags.All;
+
+            // Oder alles AUSSER IAT (falls das crasht):
+            // ScanFlags activeFlags = ScanFlags.All & ~ScanFlags.IatHooks;
+
             this.Cursor = Cursors.WaitCursor;
             try
             {
-                var result = await ProcessManager.ScanProcessForHooksAsync(p.FullInfo, _logger);
+                // Wir übergeben die Flags hier
+                var result = await ProcessManager.ScanProcessForHooksAsync(p.FullInfo, activeFlags, _logger);
+
                 this.Cursor = Cursors.Default;
 
                 if (!result.IsHooked)
                 {
-                    MessageBox.Show(this, $"Scan complete. No hooks found in PID {p.Pid} ({p.Name}).", "Scan Result", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(this, $"Scan complete. No findings in PID {p.Pid} ({p.Name}).", "Scan Result", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 
-                if (result.IatHooks.Count > 0)
+                // Anzeige-Logik (bleibt gleich, zeigt nur an was gefunden wurde)
+                if (result.Anomalies != null && result.Anomalies.Count > 0)
                 {
-                    using (var f = new DetailForm($"{p.Name} - IAT Hooks Found ({result.IatHooks.Count})", result.IatHooks, p.Pid))
+                    using (var f = new DetailForm($"{p.Name} - PE Anomalies ({result.Anomalies.Count})", result.Anomalies, p.Pid))
                         f.ShowDialog(this);
                 }
-                if (result.InlineHooks.Count > 0)
+
+                if (result.InlineHooks != null && result.InlineHooks.Count > 0)
                 {
-                    using (var f = new DetailForm($"{p.Name} - Inline Hooks Found ({result.InlineHooks.Count})", result.InlineHooks, p.Pid))
+                    using (var f = new DetailForm($"{p.Name} - Inline Hooks ({result.InlineHooks.Count})", result.InlineHooks, p.Pid))
                         f.ShowDialog(this);
                 }
-                if (result.SuspiciousThreads.Count > 0)
+
+                if (result.IatHooks != null && result.IatHooks.Count > 0)
                 {
-                    using (var f = new DetailForm($"{p.Name} - Suspicious Threads Found ({result.SuspiciousThreads.Count})", result.SuspiciousThreads, p.Pid))
+                    using (var f = new DetailForm($"{p.Name} - IAT Hooks ({result.IatHooks.Count})", result.IatHooks, p.Pid))
                         f.ShowDialog(this);
                 }
-                if (result.SuspiciousMemoryRegions.Count > 0)
+
+                if (result.SuspiciousThreads != null && result.SuspiciousThreads.Count > 0)
                 {
-                    using (var f = new DetailForm($"{p.Name} - Suspicious Memory Regions Found ({result.SuspiciousMemoryRegions.Count})", result.SuspiciousMemoryRegions, p.Pid))
+                    using (var f = new DetailForm($"{p.Name} - Suspicious Threads ({result.SuspiciousThreads.Count})", result.SuspiciousThreads, p.Pid))
                         f.ShowDialog(this);
                 }
-                if (result.FoundPeHeaders.Count > 0)
+
+                if (result.SuspiciousMemoryRegions != null && result.SuspiciousMemoryRegions.Count > 0)
                 {
-                    using (var f = new DetailForm($"{p.Name} - Hidden PE Files Found ({result.FoundPeHeaders.Count})", result.FoundPeHeaders, p.Pid))
+                    using (var f = new DetailForm($"{p.Name} - Suspicious Memory ({result.SuspiciousMemoryRegions.Count})", result.SuspiciousMemoryRegions, p.Pid))
                         f.ShowDialog(this);
+                }
+
+                if (result.FoundPeHeaders != null && result.FoundPeHeaders.Count > 0)
+                {
+                    using (var f = new DetailForm($"{p.Name} - Hidden PE Headers ({result.FoundPeHeaders.Count})", result.FoundPeHeaders, p.Pid))
+                        f.ShowDialog(this);
+                }
+
+                // Fehler anzeigen (optional)
+                if (result.Errors != null && result.Errors.Count > 0 && result.Errors.Count < 10)
+                {
+                     var text=(string.Join("\n", result.Errors), "Scan Errors", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    richTextBox1.Text += $"{text}\n";
                 }
             }
             catch (Exception ex)
             {
                 this.Cursor = Cursors.Default;
-                MessageBox.Show(this, $"Hook scan failed for PID {p.Pid}:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, $"Scan failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
         private async void ScanForHiddenProcesses()
         {
             this.Cursor = Cursors.WaitCursor;

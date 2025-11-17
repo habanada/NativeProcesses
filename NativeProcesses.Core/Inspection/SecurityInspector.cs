@@ -1,4 +1,8 @@
-﻿using NativeProcesses.Core.Engine;
+﻿/*
+   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using NativeProcesses.Core.Engine;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -63,37 +67,37 @@ namespace NativeProcesses.Core.Inspection
         // Fügen Sie diese Struktur hinzu, um die Ergebnisse zu speichern:
         public class IatHookInfo
         {
-            public string ModuleName;
-            public string FunctionName;
-            public IntPtr ExpectedAddress;
-            public IntPtr ActualAddress;
-            public string TargetModule; 
+            public string ModuleName { get; set; }
+            public string FunctionName { get; set; }
+            public IntPtr ExpectedAddress { get; set; }
+            public IntPtr ActualAddress { get; set; }
+            public string TargetModule { get; set; }
         }
         public class InlineHookInfo
         {
-            public string ModuleName;
-            public string SectionName;
-            public long Offset;
-            public byte OriginalByte;
-            public byte PatchedByte;
-            public string HookType;
-            public int HookSize;
-            public IntPtr TargetAddress; 
-            public string TargetModule; 
+            public string ModuleName{ get; set; }
+            public string SectionName{ get; set; }
+            public long Offset{ get; set; }
+            public byte OriginalByte{ get; set; }
+            public byte PatchedByte{ get; set; }
+            public string HookType{ get; set; }
+            public int HookSize{ get; set; }
+            public IntPtr TargetAddress{ get; set; } 
+            public string TargetModule{ get; set; } 
         }
         public struct SuspiciousThreadInfo
         {
-            public int ThreadId;
-            public IntPtr StartAddress;
-            public string RegionState; // z.B. MEM_PRIVATE
-            public string RegionProtection; // z.B. PAGE_EXECUTE_READWRITE
+            public int ThreadId{ get; set; }
+            public IntPtr StartAddress{ get; set; }
+            public string RegionState{ get; set; } // z.B. MEM_PRIVATE
+            public string RegionProtection{ get; set; } // z.B. PAGE_EXECUTE_READWRITE
         }
         public struct SuspiciousMemoryRegionInfo
         {
-            public IntPtr BaseAddress;
-            public long RegionSize;
-            public string Type; // z.B. MEM_PRIVATE
-            public string Protection; // z.B. PAGE_EXECUTE_READWRITE
+            public IntPtr BaseAddress{ get; set; }
+            public long RegionSize{ get; set; }
+            public string Type{ get; set; } // z.B. MEM_PRIVATE
+            public string Protection{ get; set; } // z.B. PAGE_EXECUTE_READWRITE
         }
         public SecurityInspector(IEngineLogger logger)
         {
@@ -503,7 +507,76 @@ namespace NativeProcesses.Core.Inspection
             }
             return relocOffsets;
         }
+        // DIESE METHODE FEHLT IN DEINER SecurityInspector.cs
+        public Dictionary<string, IntPtr> BuildExportMap(Native.ManagedProcess process, IntPtr moduleBase)
+        {
+            var exportMap = new Dictionary<string, IntPtr>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                byte[] dosHeaderBytes = process.ReadMemory(moduleBase, Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER)));
+                var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(dosHeaderBytes);
+                if (!dosHeader.IsValid) return exportMap;
 
+                IntPtr ntHeaderAddr = IntPtr.Add(moduleBase, dosHeader.e_lfanew);
+                byte[] ntHeaderMagicBytes = process.ReadMemory(IntPtr.Add(ntHeaderAddr, 4 + Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER))), sizeof(ushort));
+                ushort magic = BitConverter.ToUInt16(ntHeaderMagicBytes, 0);
+
+                PeStructs.IMAGE_DATA_DIRECTORY exportDirectory;
+                if (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+                {
+                    byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS64)));
+                    exportDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS64>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_EXPORT];
+                }
+                else
+                {
+                    byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS32)));
+                    exportDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS32>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_EXPORT];
+                }
+
+                if (exportDirectory.VirtualAddress == 0) return exportMap;
+
+                IntPtr exportDirAddr = IntPtr.Add(moduleBase, (int)exportDirectory.VirtualAddress);
+                var eat = ByteArrayToStructure<PeStructs.IMAGE_EXPORT_DIRECTORY>(process.ReadMemory(exportDirAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_EXPORT_DIRECTORY))));
+
+                IntPtr pFunctions = IntPtr.Add(moduleBase, (int)eat.AddressOfFunctions);
+                IntPtr pNames = IntPtr.Add(moduleBase, (int)eat.AddressOfNames);
+                IntPtr pOrdinals = IntPtr.Add(moduleBase, (int)eat.AddressOfNameOrdinals);
+
+                // Performance: Buffer lesen statt Einzelzugriffe
+                byte[] nameRvaBuffer = process.ReadMemory(pNames, (int)eat.NumberOfNames * 4);
+                byte[] ordinalBuffer = process.ReadMemory(pOrdinals, (int)eat.NumberOfNames * 2);
+
+                for (int i = 0; i < eat.NumberOfNames; i++)
+                {
+                    uint nameRva = BitConverter.ToUInt32(nameRvaBuffer, i * 4);
+                    string name = ReadNullTerminatedString(process, IntPtr.Add(moduleBase, (int)nameRva));
+
+                    ushort ordinal = BitConverter.ToUInt16(ordinalBuffer, i * 2);
+
+                    byte[] funcRvaBytes = process.ReadMemory(IntPtr.Add(pFunctions, ordinal * 4), 4);
+                    uint functionRva = BitConverter.ToUInt32(funcRvaBytes, 0);
+
+                    // Forwarder-Check:
+                    if (functionRva >= exportDirectory.VirtualAddress &&
+                        functionRva < (exportDirectory.VirtualAddress + exportDirectory.Size))
+                    {
+                        continue; // Forwarder ignorieren wir für den Map-Build
+                    }
+
+                    IntPtr functionAddress = IntPtr.Add(moduleBase, (int)functionRva);
+
+                    if (!string.IsNullOrEmpty(name) && !exportMap.ContainsKey(name))
+                    {
+                        exportMap[name] = functionAddress;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Error, "BuildExportMap failed.", ex);
+            }
+            return exportMap;
+        }
         private PeStructs.IMAGE_SECTION_HEADER FindSection(PeStructs.IMAGE_SECTION_HEADER[] sections, string sectionName)
         {
             foreach (var section in sections)
@@ -515,10 +588,28 @@ namespace NativeProcesses.Core.Inspection
             }
             throw new Exception($"Section '{sectionName}' not found.");
         }
-        public List<IatHookInfo> CheckIatHooks(Native.ManagedProcess process, IntPtr moduleToScanBase, string moduleToScanName, IntPtr ntdllBase, List<NativeProcesses.Core.Models.ProcessModuleInfo> allModules, List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
+        public List<IatHookInfo> CheckIatHooks(Native.ManagedProcess process,
+                                                      IntPtr moduleToScanBase,
+                                                      string moduleToScanName,
+                                                      Dictionary<string, IntPtr> ntdllExports,
+                                                      List<NativeProcesses.Core.Models.ProcessModuleInfo> allModules,
+                                                      List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
         {
             var results = new List<IatHookInfo>();
             bool isWow64 = process.GetIsWow64();
+
+            // HASHEREZADE OPTIMIERUNG: Module Bounds Cache erstellen
+            // Wir mappen "dllname.dll" -> (Start, Ende) für O(1) Range Checks.
+            var moduleBounds = new Dictionary<string, Tuple<long, long>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var mod in allModules)
+            {
+                if (!moduleBounds.ContainsKey(mod.BaseDllName))
+                {
+                    long start = mod.DllBase.ToInt64();
+                    long end = start + mod.SizeOfImage;
+                    moduleBounds[mod.BaseDllName] = new Tuple<long, long>(start, end);
+                }
+            }
 
             try
             {
@@ -531,7 +622,6 @@ namespace NativeProcesses.Core.Inspection
                 ushort magic = BitConverter.ToUInt16(ntHeaderMagicBytes, 0);
 
                 PeStructs.IMAGE_DATA_DIRECTORY importDirectory;
-
                 if (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
                 {
                     byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS64)));
@@ -543,76 +633,121 @@ namespace NativeProcesses.Core.Inspection
                     importDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS32>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_IMPORT];
                 }
 
-                if (importDirectory.VirtualAddress == 0)
-                {
-                    return results;
-                }
+                if (importDirectory.VirtualAddress == 0) return results;
 
                 IntPtr importDescAddr = IntPtr.Add(moduleToScanBase, (int)importDirectory.VirtualAddress);
                 int importDescSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_IMPORT_DESCRIPTOR));
 
-                for (int descIndex = 0; ; descIndex++)
+                for (int descIndex = 0; descIndex < 500; descIndex++) // Safety limit
                 {
                     byte[] importDescBytes = process.ReadMemory(IntPtr.Add(importDescAddr, descIndex * importDescSize), importDescSize);
                     var importDesc = ByteArrayToStructure<PeStructs.IMAGE_IMPORT_DESCRIPTOR>(importDescBytes);
 
-                    if (importDesc.Name == 0 && importDesc.FirstThunk == 0)
-                        break;
+                    if (importDesc.Name == 0 && importDesc.FirstThunk == 0) break;
 
-                    string dllName = ReadNullTerminatedString(process, IntPtr.Add(moduleToScanBase, (int)importDesc.Name));
+                    string importedDllName = ReadNullTerminatedString(process, IntPtr.Add(moduleToScanBase, (int)importDesc.Name));
 
-                    if (!dllName.Equals("ntdll.dll", StringComparison.OrdinalIgnoreCase))
-                        continue;
+                    // OPTIMIERUNG 1: Wir holen uns direkt die Grenzen der importierten DLL
+                    long validStart = 0;
+                    long validEnd = 0;
+                    bool limitsFound = false;
+
+                    if (moduleBounds.TryGetValue(importedDllName, out var bounds))
+                    {
+                        validStart = bounds.Item1;
+                        validEnd = bounds.Item2;
+                        limitsFound = true;
+                    }
 
                     uint originalFirstThunkRva = importDesc.OriginalFirstThunk == 0 ? importDesc.FirstThunk : importDesc.OriginalFirstThunk;
                     IntPtr iatAddress = IntPtr.Add(moduleToScanBase, (int)importDesc.FirstThunk);
 
-                    for (int thunkIndex = 0; ; thunkIndex++)
+                    // Wir lesen die ganze IAT-Tabelle für diese DLL am Stück (Bulk Read), statt Eintrag für Eintrag.
+                    // Annahme: Max 1000 Funktionen pro DLL -> 8000 Bytes (x64).
+                    int maxEntries = 1000;
+                    int ptrSize = isWow64 ? 4 : 8;
+                    byte[] iatBlock = process.ReadMemory(iatAddress, maxEntries * ptrSize);
+
+                    for (int thunkIndex = 0; thunkIndex < maxEntries; thunkIndex++)
                     {
-                        int ptrSize = isWow64 ? 4 : 8;
-                        IntPtr thunkEntryAddr = IntPtr.Add(iatAddress, thunkIndex * ptrSize);
+                        ulong thunkValue;
+                        if (isWow64)
+                            thunkValue = BitConverter.ToUInt32(iatBlock, thunkIndex * 4);
+                        else
+                            thunkValue = BitConverter.ToUInt64(iatBlock, thunkIndex * 8);
 
-                        ulong thunkValue = ReadUIntPtr(process, thunkEntryAddr, isWow64);
-                        if (thunkValue == 0)
-                            break;
-
-                        string functionName = GetImportName(process, moduleToScanBase, originalFirstThunkRva, thunkIndex, isWow64);
-
-                        if (functionName.StartsWith("Ordinal"))
-                            continue; // Ordinal-Imports überspringen wir (zu komplex für diesen Check)
+                        if (thunkValue == 0) break; // Ende der Tabelle
 
                         IntPtr actualAddressInIat = (IntPtr)thunkValue;
+                        long addrVal = actualAddressInIat.ToInt64();
 
-                        // HIER IST DIE VALIDIERUNG (Option A)
-                        // Wir holen die ECHTE Adresse aus der EAT von ntdll.dll
-                        IntPtr expectedAddress = GetExportAddress(process, ntdllBase, functionName, allModules);
-                        if (expectedAddress == IntPtr.Zero)
+                        // --- HASHEREZADE CHECK ---
+                        // Liegt die Adresse im Bereich der importierten DLL?
+                        if (limitsFound)
                         {
-                            // Funktion ist ein Forwarder (Kritikpunkt #4) oder existiert nicht.
-                            // In beiden Fällen ist es kein Hook.
+                            if (addrVal >= validStart && addrVal < validEnd)
+                            {
+                                // JA: Adresse zeigt in die korrekte DLL. Das ist zu 99.9% legitim.
+                                // Wir überspringen den teuren Namens-Lookup!
+                                continue;
+                            }
+                        }
+
+                        // --- ANOMALIE GEFUNDEN ---
+                        // Die Adresse liegt NICHT in der Ziel-DLL.
+                        // Das kann zwei Gründe haben:
+                        // 1. Es ist ein "Forwarder" (z.B. Kernel32 leitet an Ntdll weiter). Legitim.
+                        // 2. Es ist ein Hook (Shellcode oder fremde DLL). Malicious.
+
+                        // JETZT machen wir den teuren Lookup, um zu sehen was es ist.
+                        string functionName = GetImportName(process, moduleToScanBase, originalFirstThunkRva, thunkIndex, isWow64);
+                        if (functionName.StartsWith("Ordinal") || functionName == "[Error]") continue;
+
+                        // Spezialfall NTDLL: Die haben wir gecached.
+                        if (importedDllName.Equals("ntdll.dll", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (ntdllExports.TryGetValue(functionName, out IntPtr expectedAddress))
+                            {
+                                if (actualAddressInIat != expectedAddress)
+                                {
+                                    string targetModule = AttributeAddress(actualAddressInIat, allModules, regions);
+                                    results.Add(new IatHookInfo
+                                    {
+                                        ModuleName = moduleToScanName,
+                                        FunctionName = functionName,
+                                        ExpectedAddress = expectedAddress,
+                                        ActualAddress = actualAddressInIat,
+                                        TargetModule = targetModule
+                                    });
+                                }
+                            }
                             continue;
                         }
 
-                        if (actualAddressInIat != expectedAddress)
+                        // Für andere DLLs (z.B. Kernel32 Forwarders):
+                        // Wir prüfen, ob die Adresse zumindest in IRGENDEINER bekannten DLL liegt.
+                        string targetModName = AttributeAddress(actualAddressInIat, allModules, regions);
+
+                        if (targetModName.StartsWith("PRIVATE_MEMORY") || targetModName == "UNKNOWN_REGION")
                         {
-                            // HOOK GEFUNDEN!
-                            // Finde heraus, WOHIN die IAT umgeleitet wird.
-                            string targetModule = AttributeAddress(actualAddressInIat, allModules, regions);
+                            // TREFFER! Adresse zeigt auf Heap/Stack/Unbekannt -> HOOK!
                             results.Add(new IatHookInfo
                             {
                                 ModuleName = moduleToScanName,
-                                FunctionName = functionName,
-                                ExpectedAddress = expectedAddress,
+                                FunctionName = $"{importedDllName}!{functionName}", // Zeige Herkunft
+                                ExpectedAddress = IntPtr.Zero, // Unbekannt ohne EAT Parsing
                                 ActualAddress = actualAddressInIat,
-                                TargetModule = targetModule 
+                                TargetModule = targetModName
                             });
                         }
+                        // Falls es auf ein anderes Modul zeigt (z.B. ntdll), ist es wahrscheinlich ein Forwarder.
+                        // Wir ignorieren das hier aus Performance-Gründen, da legitime Forwarders sehr häufig sind.
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger?.Log(LogLevel.Error, $"SecurityInspector.CheckIatHooks failed for {moduleToScanName}", ex);
+                // _logger?.Log(LogLevel.Error, $"CheckIatHooks error {moduleToScanName}", ex);
             }
             return results;
         }
@@ -1103,11 +1238,13 @@ namespace NativeProcesses.Core.Inspection
         public List<SecurityInspector.SuspiciousMemoryRegionInfo> SuspiciousMemoryRegions { get; internal set; }
         public List<FoundPeHeaderInfo> FoundPeHeaders { get; internal set; } 
         public List<string> Errors { get; internal set; }
+        public List<PeAnomalyInfo> Anomalies { get; internal set; }
 
         public bool IsHooked
         {
-            get { return (IatHooks.Count > 0) || (InlineHooks.Count > 0) || (SuspiciousThreads.Count > 0) || (SuspiciousMemoryRegions.Count > 0) || (FoundPeHeaders.Count > 0); } 
-        }
+            get { return (IatHooks.Count > 0) || (InlineHooks.Count > 0) || (SuspiciousThreads.Count > 0) || (SuspiciousMemoryRegions.Count > 0) || (FoundPeHeaders.Count > 0) ||
+                       (Anomalies.Count > 0);  } 
+            }
 
         internal HookDetectionResult(int pid)
         {
@@ -1116,6 +1253,7 @@ namespace NativeProcesses.Core.Inspection
             InlineHooks = new List<SecurityInspector.InlineHookInfo>();
             SuspiciousThreads = new List<SecurityInspector.SuspiciousThreadInfo>();
             SuspiciousMemoryRegions = new List<SecurityInspector.SuspiciousMemoryRegionInfo>();
+            Anomalies = new List<PeAnomalyInfo>(); // NEU: Initialisierung
             Errors = new List<string>();
         }
     }

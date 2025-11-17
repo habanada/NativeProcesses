@@ -1,4 +1,8 @@
-﻿using NativeProcesses.Core.Engine;
+﻿/*
+   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using NativeProcesses.Core.Engine;
 using NativeProcesses.Core.Models;
 using System;
 using System.Collections.Generic;

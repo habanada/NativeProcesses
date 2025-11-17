@@ -1,73 +1,176 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿/*
+   NativeProcesses Framework  |
+   © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using System;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace NativeProcesses.Core.Native
 {
     internal static class NtProcessInfoStructs
     {
         [StructLayout(LayoutKind.Sequential)]
-        internal struct PROCESS_BASIC_INFORMATION_64
+        public struct UNICODE_STRING
         {
-            public IntPtr Reserved1;
+            public ushort Length;
+            public ushort MaximumLength;
+            public IntPtr Buffer;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct UNICODE_STRING_32
+        {
+            public ushort Length;
+            public ushort MaximumLength;
+            public uint Buffer;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct UNICODE_STRING_64
+        {
+            public ushort Length;
+            public ushort MaximumLength;
+            public ulong Buffer;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct LIST_ENTRY
+        {
+            public IntPtr Flink;
+            public IntPtr Blink;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct LIST_ENTRY_32
+        {
+            public uint Flink;
+            public uint Blink;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct LIST_ENTRY_64
+        {
+            public ulong Flink;
+            public ulong Blink;
+        }
+
+        // --- Process Basic Information ---
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PROCESS_BASIC_INFORMATION
+        {
+            public IntPtr ExitStatus;
             public IntPtr PebBaseAddress;
-            public IntPtr Reserved2_0;
-            public IntPtr Reserved2_1;
+            public IntPtr AffinityMask;
+            public IntPtr BasePriority;
             public IntPtr UniqueProcessId;
-            public IntPtr Reserved3;
+            public IntPtr InheritedFromUniqueProcessId;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct PROCESS_BASIC_INFORMATION_32
+        public struct PROCESS_BASIC_INFORMATION_32
         {
-            public IntPtr Reserved1;
+            public uint ExitStatus;
             public uint PebBaseAddress;
-            public IntPtr Reserved2_0;
-            public IntPtr Reserved2_1;
-            public IntPtr UniqueProcessId;
-            public IntPtr Reserved3;
+            public uint AffinityMask;
+            public uint BasePriority;
+            public uint UniqueProcessId;
+            public uint InheritedFromUniqueProcessId;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct PEB_64
+        public struct PROCESS_BASIC_INFORMATION_64
         {
-            public byte Reserved1_0;
-            public byte Reserved1_1;
+            public ulong ExitStatus;
+            public ulong PebBaseAddress;
+            public ulong AffinityMask;
+            public ulong BasePriority;
+            public ulong UniqueProcessId;
+            public ulong InheritedFromUniqueProcessId;
+        }
+
+        // --- PEB (Process Environment Block) ---
+
+        // Gekürzte Version, konzentriert auf Loader-Daten (LDR) und Process Parameters
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PEB_PARTIAL
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 2)]
+            public byte[] InheritedAddressSpace;
             public byte BeingDebugged;
-            public byte Reserved1_2;
-            public IntPtr Reserved2_0;
-            public IntPtr Reserved2_1;
-            public IntPtr Ldr;
+            public byte BitField;
+            public IntPtr Mutant;
+            public IntPtr ImageBaseAddress;
+            public IntPtr Ldr; // Zeigt auf PEB_LDR_DATA
+            public IntPtr ProcessParameters; // Zeigt auf RTL_USER_PROCESS_PARAMETERS
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct PEB_32
+        public struct PEB_32_PARTIAL
         {
-            public byte Reserved1_0;
-            public byte Reserved1_1;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 2)]
+            public byte[] InheritedAddressSpace;
             public byte BeingDebugged;
-            public byte Reserved1_2;
-            public uint Reserved2_0;
-            public uint Reserved2_1;
+            public byte BitField;
+            public uint Mutant;
+            public uint ImageBaseAddress;
             public uint Ldr;
+            public uint ProcessParameters;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct PEB_LDR_DATA_64
+        public struct PEB_64_PARTIAL
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 2)]
+            public byte[] InheritedAddressSpace;
+            public byte BeingDebugged;
+            public byte BitField;
+            public ulong Mutant;
+            public ulong ImageBaseAddress;
+            public ulong Ldr;
+            public ulong ProcessParameters;
+        }
+
+        // --- RTL User Process Parameters (für Spoofing Checks) ---
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RTL_USER_PROCESS_PARAMETERS_PARTIAL
+        {
+            public uint MaximumLength;
+            public uint Length;
+            public uint Flags;
+            public uint DebugFlags;
+            public IntPtr ConsoleHandle;
+            public uint ConsoleFlags;
+            public IntPtr StandardInput;
+            public IntPtr StandardOutput;
+            public IntPtr StandardError;
+            public UNICODE_STRING CurrentDirectory;
+            public IntPtr CurrentDirectoryHandle;
+            public UNICODE_STRING DllPath;
+            public UNICODE_STRING ImagePathName; // Wichtig für Spoofing-Check
+            public UNICODE_STRING CommandLine;   // Wichtig für Spoofing-Check
+        }
+
+        // --- LDR Data (Loader Data Table) ---
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PEB_LDR_DATA
         {
             public uint Length;
             public byte Initialized;
             public IntPtr SsHandle;
-            public LIST_ENTRY_64 InLoadOrderModuleList;
-            public LIST_ENTRY_64 InMemoryOrderModuleList;
-            public LIST_ENTRY_64 InInitializationOrderModuleList;
+            public LIST_ENTRY InLoadOrderModuleList;
+            public LIST_ENTRY InMemoryOrderModuleList;
+            public LIST_ENTRY InInitializationOrderModuleList;
+            public IntPtr EntryInProgress;
+            public byte ShutdownInProgress;
+            public IntPtr ShutdownThreadId;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct PEB_LDR_DATA_32
+        public struct PEB_LDR_DATA_32
         {
             public uint Length;
             public byte Initialized;
@@ -78,34 +181,36 @@ namespace NativeProcesses.Core.Native
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct LIST_ENTRY_64
+        public struct PEB_LDR_DATA_64
         {
-            public IntPtr Flink;
-            public IntPtr Blink;
+            public uint Length;
+            public byte Initialized;
+            public ulong SsHandle;
+            public LIST_ENTRY_64 InLoadOrderModuleList;
+            public LIST_ENTRY_64 InMemoryOrderModuleList;
+            public LIST_ENTRY_64 InInitializationOrderModuleList;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct LIST_ENTRY_32
+        public struct LDR_DATA_TABLE_ENTRY
         {
-            public uint Flink;
-            public uint Blink;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        internal struct LDR_DATA_TABLE_ENTRY_64
-        {
-            public LIST_ENTRY_64 InLoadOrderLinks;
-            public LIST_ENTRY_64 InMemoryOrderLinks;
-            public LIST_ENTRY_64 InInitializationOrderLinks;
+            public LIST_ENTRY InLoadOrderLinks;
+            public LIST_ENTRY InMemoryOrderLinks;
+            public LIST_ENTRY InInitializationOrderLinks;
             public IntPtr DllBase;
             public IntPtr EntryPoint;
             public uint SizeOfImage;
-            public UNICODE_STRING_64 FullDllName;
-            public UNICODE_STRING_64 BaseDllName;
+            public UNICODE_STRING FullDllName;
+            public UNICODE_STRING BaseDllName;
+            public uint Flags;
+            public ushort LoadCount;
+            public ushort TlsIndex;
+            public LIST_ENTRY HashLinks;
+            public uint TimeDateStamp;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct LDR_DATA_TABLE_ENTRY_32
+        public struct LDR_DATA_TABLE_ENTRY_32
         {
             public LIST_ENTRY_32 InLoadOrderLinks;
             public LIST_ENTRY_32 InMemoryOrderLinks;
@@ -115,22 +220,82 @@ namespace NativeProcesses.Core.Native
             public uint SizeOfImage;
             public UNICODE_STRING_32 FullDllName;
             public UNICODE_STRING_32 BaseDllName;
+            public uint Flags;
+            public ushort LoadCount;
+            public ushort TlsIndex;
+            public LIST_ENTRY_32 HashLinks;
+            public uint TimeDateStamp;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct UNICODE_STRING_64
+        public struct LDR_DATA_TABLE_ENTRY_64
         {
-            public ushort Length;
-            public ushort MaximumLength;
-            public IntPtr Buffer;
+            public LIST_ENTRY_64 InLoadOrderLinks;
+            public LIST_ENTRY_64 InMemoryOrderLinks;
+            public LIST_ENTRY_64 InInitializationOrderLinks;
+            public ulong DllBase;
+            public ulong EntryPoint;
+            public uint SizeOfImage;
+            public UNICODE_STRING_64 FullDllName;
+            public UNICODE_STRING_64 BaseDllName;
+            public uint Flags;
+            public ushort LoadCount;
+            public ushort TlsIndex;
+            public LIST_ENTRY_64 HashLinks;
+            public uint TimeDateStamp;
+        }
+
+        // --- Memory Information ---
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MEMORY_BASIC_INFORMATION_EX
+        {
+            public MEMORY_BASIC_INFORMATION BasicInfo;
+            public uint PartitionId;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct UNICODE_STRING_32
+        public struct MEMORY_BASIC_INFORMATION
         {
-            public ushort Length;
-            public ushort MaximumLength;
-            public uint Buffer;
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public uint AllocationProtect;
+            public IntPtr RegionSize;
+            public uint State;
+            public uint Protect;
+            public uint Type;
+        }
+
+        // --- Thread Information (TEB) ---
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct TEB_PARTIAL
+        {
+            public NT_TIB Tib;
+            public IntPtr EnvironmentPointer;
+            public CLIENT_ID ClientId;
+            public IntPtr ActiveRpcHandle;
+            public IntPtr ThreadLocalStoragePointer;
+            public IntPtr ProcessEnvironmentBlock; // Zeigt zurück auf PEB
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct NT_TIB
+        {
+            public IntPtr ExceptionList;
+            public IntPtr StackBase;    // Wichtig für Stack-Walks
+            public IntPtr StackLimit;   // Wichtig für Stack-Walks
+            public IntPtr SubSystemTib;
+            public IntPtr FiberData; // oder Version
+            public IntPtr ArbitraryUserPointer;
+            public IntPtr Self;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CLIENT_ID
+        {
+            public IntPtr UniqueProcess;
+            public IntPtr UniqueThread;
         }
     }
 }

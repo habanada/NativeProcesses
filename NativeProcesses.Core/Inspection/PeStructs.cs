@@ -1,4 +1,8 @@
-﻿using System;
+﻿/*
+   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
+   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
+*/
+using System;
 using System.Runtime.InteropServices;
 
 namespace NativeProcesses.Core.Inspection
@@ -204,7 +208,10 @@ namespace NativeProcesses.Core.Inspection
         // Diese Konstanten definieren, WIE eine Adresse gepatcht wird
         // (Wir brauchen nur 0 und 10 für 32/64-Bit)
         public const ushort IMAGE_REL_BASED_ABSOLUTE = 0;
-        public const ushort IMAGE_REL_BASED_DIR64 = 10;
         public const ushort IMAGE_REL_BASED_HIGHLOW = 3;
+        public const ushort IMAGE_REL_BASED_DIR64 = 10;
+
+
+       
     }
 }
