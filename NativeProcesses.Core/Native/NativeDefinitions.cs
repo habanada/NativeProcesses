@@ -4,6 +4,7 @@
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
 using System;
+using System.Runtime.InteropServices;
 
 namespace NativeProcesses.Core.Native
 {
@@ -161,6 +162,22 @@ namespace NativeProcesses.Core.Native
             public const int MemoryRegionInformationEx = 7;
             public const int MemoryPrivilegedBasicInformation = 8;
         }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct MEMORY_MAPPED_FILENAME_INFORMATION
+        {
+            public NtProcessInfoStructs.UNICODE_STRING Name;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] // Puffer für den Namen
+            public string NameBuffer;
+        }
+
+        // Detaillierte Image-Infos vom Kernel
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MEMORY_IMAGE_INFORMATION
+        {
+            public IntPtr ImageBase;
+            public IntPtr SizeOfImage;
+            public uint ImageFlags;
+        }
 
         public static class SectionInformationClass
         {
@@ -213,5 +230,32 @@ namespace NativeProcesses.Core.Native
             public const int otMenu = 2;
             public const int otCursorIcon = 3;
         }
+
+        public static class DbgHelp
+        {
+            [Flags]
+            public enum MiniDumpType : int
+            {
+                // Wir brauchen Full Memory für .NET Heap Analyse!
+                MiniDumpWithFullMemory = 0x00000002,
+                MiniDumpWithHandleData = 0x00000004,
+                MiniDumpWithUnloadedModules = 0x00000020,
+                MiniDumpWithProcessThreadData = 0x00000100,
+                MiniDumpWithFullMemoryInfo = 0x00000800,
+                MiniDumpWithThreadInfo = 0x00001000,
+                MiniDumpWithTokenInformation = 0x00040000
+            }
+
+            [DllImport("dbghelp.dll", EntryPoint = "MiniDumpWriteDump", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+            public static extern bool MiniDumpWriteDump(
+                IntPtr hProcess,
+                uint processId,
+                IntPtr hFile,
+                MiniDumpType dumpType,
+                IntPtr exceptionParam,
+                IntPtr userStreamParam,
+                IntPtr callbackParam);
+        }
+
     }
 }

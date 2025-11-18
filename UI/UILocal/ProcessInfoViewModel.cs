@@ -337,7 +337,12 @@ namespace ProcessDemo
             get { return _isMarkedCritical; }
             set { _isMarkedCritical = value; Notify(); }
         }
-
+        private string _scanStatus = "Unscanned";
+        public string ScanStatus
+        {
+            get { return _scanStatus; }
+            set { _scanStatus = value; Notify(); }
+        }
         public ProcessInfoViewModel(FullProcessInfo source)
         {
             this.Pid = source.Pid;

@@ -53,7 +53,47 @@ namespace NativeProcesses.Core.Engine
             _processCache = new ConcurrentDictionary<int, FullProcessInfo>();
             this.DetailOptions = new ProcessDetailOptions();
         }
+        // In ProcessService Klasse einfügen:
 
+        public void StartMonitoringFast(int pid)
+        {
+            // Prüfen ob unser Provider ein Hybrid ist
+            if (_provider is HybridProcessProvider hybrid)
+            {
+                // Suche den ETW Provider in der Liste
+                foreach (var p in hybrid.Providers)
+                {
+                    if (p is EtwProcessProvider etw)
+                    {
+                        etw.StartMonitoringPid(pid);
+                    }
+                }
+            }
+            // Fallback, falls wir nur den ETW Provider direkt nutzen
+            else if (_provider is EtwProcessProvider etwOnly)
+            {
+                etwOnly.StartMonitoringPid(pid);
+            }
+        }
+
+        public void StopMonitoringFast(int pid)
+        {
+            if (_provider is HybridProcessProvider hybrid)
+            {
+                foreach (var p in hybrid.Providers)
+                {
+                    if (p is EtwProcessProvider etw)
+                    {
+                        etw.StopMonitoringPid(pid);
+                    }
+                }
+            }
+            else if (_provider is EtwProcessProvider etwOnly)
+            {
+                etwOnly.StopMonitoringPid(pid);
+            }
+        }
+        // Dasselbe für StopMonitoringFast...
         public void Start()
         {
             _logger?.Log(LogLevel.Info, "ProcessService starting...");

@@ -124,83 +124,183 @@ namespace processlist
         }
         private async void DumpSuspiciousMemory_Click(object sender, EventArgs e)
         {
+            // 1. Validierung der Auswahl
             if (gridDetails.SelectedRows.Count == 0 || _pid == -1 || _itemType == null) return;
             dynamic item = gridDetails.SelectedRows[0].DataBoundItem;
 
             IntPtr baseAddress = IntPtr.Zero;
             long regionSize = 0;
             bool isPeHeader = false;
+            bool forceRecalculateSize = false;
+            string suggestedFileName = $"PID_{_pid}_DUMP.bin";
+            byte[] suggestedHeaderFix = null;
 
             try
             {
+                // 2. Typ-Erkennung und Datenextraktion (Erweitert für Phantom Module)
+
+                // A. Suspicious Memory (RWX Regionen)
                 if (_itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousMemoryRegionInfo))
                 {
                     baseAddress = item.BaseAddress;
                     regionSize = item.RegionSize;
+                    suggestedFileName = $"PID_{_pid}_MemRegion_{baseAddress.ToString("X")}.bin";
                 }
+                // B. Found PE Headers (Hidden PE / Header Stomping)
                 else if (_itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo))
                 {
                     baseAddress = item.BaseAddress;
                     regionSize = item.RegionSize;
                     isPeHeader = true;
+                    suggestedHeaderFix = item.SuggestedHeaderFix;
+                    suggestedFileName = $"PID_{_pid}_HiddenPE_{baseAddress.ToString("X")}.bin";
                 }
-                // ... (SuspiciousThreadInfo Logik bleibt gleich)
-            }
-            catch { return; }
+                // C. Suspicious Threads (Wir kennen nur die Startadresse)
+                else if (_itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousThreadInfo))
+                {
+                    baseAddress = item.StartAddress;
+                    regionSize = 0x1000; // Dummy-Größe, wir berechnen gleich die echte
+                    forceRecalculateSize = true;
+                    suggestedFileName = $"PID_{_pid}_ThreadStart_{baseAddress.ToString("X")}.bin";
+                }
+                // D. Phantom Module (VAD Scanner Results) -> NEU!
+                // Wir prüfen den Typ-Namen dynamisch oder per typeof, falls du den Namespace importiert hast
+                else if (item.GetType().Name == "PhantomModuleInfo")
+                {
+                    baseAddress = item.BaseAddress;
+                    regionSize = item.Size;
+                    isPeHeader = true; // Phantom Module sind fast immer PEs
 
+                    string name = item.NtPath;
+                    // Pfad bereinigen für Dateinamen (\Device\Harddisk... -> datei.dll)
+                    try { name = System.IO.Path.GetFileName(name.Replace("\\", "/")); } catch { }
+
+                    if (string.IsNullOrEmpty(name)) name = "Phantom";
+                    suggestedFileName = $"PID_{_pid}_{name}_{baseAddress.ToString("X")}.dll";
+                }
+                // Fallback für unbekannte Typen
+                else
+                {
+                    try { baseAddress = item.BaseAddress; } catch { return; }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error resolving item type: {ex.Message}");
+                return;
+            }
+
+            // 3. Speichern-Dialog
             using (SaveFileDialog sfd = new SaveFileDialog())
             {
-                sfd.FileName = $"PID_{_pid}_DUMP_{baseAddress.ToString("X")}.bin";
-                sfd.Filter = "Binary Dump (*.bin)|*.bin";
+                sfd.FileName = suggestedFileName;
+                sfd.Filter = "Binary Dump (*.bin)|*.bin|Executable (*.exe)|*.exe|Dynamic Library (*.dll)|*.dll";
 
                 if (sfd.ShowDialog(this) == DialogResult.OK)
                 {
                     this.Cursor = Cursors.WaitCursor;
                     try
                     {
-                        // 1. Raw Dump ziehen (über NTAPI, stealthy)
-                        // Dazu nutzen wir ProcessManager Helper, aber wir brauchen die Bytes hier im RAM für den Reconstructor
-                        // Da DumpProcessMemoryRegionAsync direkt in Datei schreibt, lesen wir es hier manuell kurz ein.
-
                         byte[] rawDump = null;
-                        var access = NativeProcesses.Core.Native.ProcessAccessFlags.VmRead | NativeProcesses.Core.Native.ProcessAccessFlags.QueryInformation;
 
-                        // Wir nutzen temporär einen ManagedProcess Helper direkt hier, oder erweitern ProcessManager um "ReadBytes"
-                        // Um Code-Duplizierung zu vermeiden, nutzen wir einfach ManagedProcess direkt:
+                        // Wir benötigen Lesezugriff und Query-Rechte (Query für Memory Info)
+                        var access = NativeProcesses.Core.Native.ProcessAccessFlags.VmRead |
+                                     NativeProcesses.Core.Native.ProcessAccessFlags.QueryInformation;
+
+                        // 4. Zugriff auf den Prozess (Live oder Snapshot - je nachdem was _pid referenziert)
                         using (var proc = new NativeProcesses.Core.Native.ManagedProcess(_pid, access))
                         {
-                            rawDump = proc.ReadMemory(baseAddress, (int)regionSize);
-
-                            // --- SMART FIXING (ImpRec + Header Repair) ---
-                            // Wir fragen den User oder machen es automatisch bei PE-Headern
-                            if (isPeHeader || (rawDump.Length > 2 && rawDump[0] == 0x4D && rawDump[1] == 0x5A))
+                            // 4a. Smarte Größen-Erkennung
+                            // Wenn wir nur einen Thread-Start haben oder die Größe unsicher ist, fragen wir den Kernel (VAD).
+                            if (regionSize <= 0x1000 || forceRecalculateSize)
                             {
-                                var reconstructor = new NativeProcesses.Core.Inspection.PeReconstructor(null);
-                                var modules = proc.GetLoadedModules(null);
-                                bool is64 = proc.GetIsWow64() == false;
+                                // Wir holen alle Regionen (nutzt jetzt den schnellen WorkingSetEnumerator im Backend!)
+                                var regions = proc.GetVirtualMemoryRegions();
 
-                                // Versuche Import Table zu rekonstruieren & Header zu fixen
-                                rawDump = reconstructor.ReconstructPe(rawDump, modules, proc, is64);
+                                // Finde die Region, die unsere Adresse beinhaltet
+                                var region = regions.FirstOrDefault(r => r.BaseAddress.ToInt64() <= baseAddress.ToInt64() &&
+                                                                         (r.BaseAddress.ToInt64() + r.RegionSize) > baseAddress.ToInt64());
+                                if (region != null)
+                                {
+                                    // Lese ab Startadresse bis Ende der Allocation
+                                    long offset = baseAddress.ToInt64() - region.BaseAddress.ToInt64();
+                                    regionSize = region.RegionSize - offset;
+                                }
+                                else
+                                {
+                                    // Fallback, falls VAD fehlschlägt (sehr selten)
+                                    regionSize = 0x20000; // 128KB
+                                }
                             }
 
-                            // Falls der AnomalyScanner einen "SuggestedHeaderFix" hatte (z.B. IcedID),
-                            // müssten wir den hier theoretisch anwenden. Da wir das Objekt 'item' haben:
-                            if (_itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo))
+                            // 5. Speicher lesen (Raw Dump)
+                            rawDump = proc.ReadMemory(baseAddress, (int)regionSize);
+
+                            // 6. Advanced Reconstruction Pipeline (ImpRec + Fixes)
+                            // Wir versuchen zu rekonstruieren, wenn wir MZ sehen oder wissen, dass es ein PE sein sollte (Phantom/HiddenPE)
+                            bool hasMz = (rawDump.Length > 2 && rawDump[0] == 0x4D && rawDump[1] == 0x5A);
+
+                            if (isPeHeader || hasMz)
                             {
-                                var peInfo = (NativeProcesses.Core.Inspection.FoundPeHeaderInfo)item;
-                                if (peInfo.RequiresHeaderReconstruction && peInfo.SuggestedHeaderFix != null)
+                                // A. Header Repair (z.B. bei IcedID "Headerless PE")
+                                // Wenn der Scanner (FoundPeHeaderInfo) einen Fix berechnet hat, wenden wir ihn an.
+                                if (suggestedHeaderFix != null)
                                 {
-                                    // Header patchen (MZ...)
-                                    Array.Copy(peInfo.SuggestedHeaderFix, 0, rawDump, 0, Math.Min(rawDump.Length, peInfo.SuggestedHeaderFix.Length));
+                                    int copyLen = Math.Min(rawDump.Length, suggestedHeaderFix.Length);
+                                    Array.Copy(suggestedHeaderFix, 0, rawDump, 0, copyLen);
+
+                                    // Re-Check MZ nach Fix (jetzt sollte es ein valides PE sein)
+                                    hasMz = (rawDump[0] == 0x4D && rawDump[1] == 0x5A);
+                                }
+
+                                // B. Import Reconstruction (ImpRec) - Das "PE-sieve Feature"
+                                if (hasMz)
+                                {
+                                    try
+                                    {
+                                        // Module laden, damit wir wissen, wohin die Imports zeigen
+                                        // (Nutzt PSS Snapshot Logic im Backend, wenn verfügbar)
+                                        var modules = await NativeProcesses.Core.Native.ProcessManager.GetModulesAsync(proc, null);
+                                        bool is64 = proc.GetIsWow64() == false;
+
+                                        // HIER: Wir nutzen deine PeReconstructor Klasse.
+                                        // Voraussetzung: Du hast die Klasse mit dem Code aus "PeEmulation/AdvancedPeReconstructor" aktualisiert!
+                                        var reconstructor = new NativeProcesses.Core.Inspection.PeReconstructor(null);
+
+                                        // Führt den Rebuild durch (IAT Suche -> Import Table Bau -> Header Patch -> Resize)
+                                        byte[] reconstructedDump = reconstructor.ReconstructPe(rawDump, modules, proc, is64);
+
+                                        // Wenn erfolgreich (und größer/anders), übernehmen wir das Ergebnis
+                                        if (reconstructedDump != null && reconstructedDump.Length >= rawDump.Length)
+                                        {
+                                            rawDump = reconstructedDump;
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        // ImpRec ist optional. Wenn es fehlschlägt, speichern wir den Raw Dump.
+                                        // System.Diagnostics.Debug.WriteLine("ImpRec warning: " + ex.Message);
+                                    }
                                 }
                             }
                         }
 
-                        // 2. Schreiben
+                        // 7. Schreiben auf Festplatte
                         System.IO.File.WriteAllBytes(sfd.FileName, rawDump);
 
                         this.Cursor = Cursors.Default;
-                        MessageBox.Show($"Dump & Repair successful!\nSaved to: {sfd.FileName}", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                        string statusMsg = $"Dump saved to:\n{sfd.FileName}\n\n" +
+                                           $"Source: 0x{baseAddress.ToString("X")}\n" +
+                                           $"Size: {rawDump.Length:N0} bytes";
+
+                        if (rawDump.Length > regionSize)
+                            statusMsg += "\n\n[+] Import Table Reconstructed (Executable)";
+
+                        if (suggestedHeaderFix != null)
+                            statusMsg += "\n[+] PE Header Repaired";
+
+                        MessageBox.Show(statusMsg, "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                     catch (Exception ex)
                     {

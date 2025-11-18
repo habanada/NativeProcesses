@@ -53,14 +53,14 @@ namespace NativeProcesses.Core.Native
 
         #region P/Invoke Kernel32
         [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr OpenProcess(
+        public static extern IntPtr OpenProcess(
             ProcessAccessFlags processAccess,
             bool bInheritHandle,
             int processId);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool CloseHandle(IntPtr hObject);
+        public static extern bool CloseHandle(IntPtr hObject);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -129,7 +129,7 @@ namespace NativeProcesses.Core.Native
             [Out] char[] lpBuffer);
 
         [DllImport("ntdll.dll", SetLastError = true)]
-        private static extern int NtQueryVirtualMemory(
+        public static extern int NtQueryVirtualMemory(
             IntPtr ProcessHandle,
             IntPtr BaseAddress,
             int MemoryInformationClass,
@@ -315,7 +315,7 @@ namespace NativeProcesses.Core.Native
             Query = 0x0008,
         }
 
-        private enum TOKEN_INFORMATION_CLASS
+        public enum TOKEN_INFORMATION_CLASS
         {
             TokenUser = 1,
             TokenGroups,
@@ -350,25 +350,25 @@ namespace NativeProcesses.Core.Native
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct TOKEN_USER
+        public struct TOKEN_USER
         {
             public SID_AND_ATTRIBUTES User;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct SID_AND_ATTRIBUTES
+        public struct SID_AND_ATTRIBUTES
         {
             public IntPtr Sid;
             public uint Attributes;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct TOKEN_MANDATORY_LABEL
+        public struct TOKEN_MANDATORY_LABEL
         {
             public SID_AND_ATTRIBUTES Label;
         }
 
-        private enum SID_NAME_USE
+        public enum SID_NAME_USE
         {
             SidTypeUser = 1,
             SidTypeGroup,
@@ -381,7 +381,7 @@ namespace NativeProcesses.Core.Native
             SidTypeComputer
         }
 
-        private enum PROCESS_MITIGATION_POLICY
+        public enum PROCESS_MITIGATION_POLICY
         {
             ProcessDEPPolicy = 0,
             ProcessASLRPolicy = 1,
@@ -391,14 +391,14 @@ namespace NativeProcesses.Core.Native
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct PROCESS_MITIGATION_DEP_POLICY
+        public struct PROCESS_MITIGATION_DEP_POLICY
         {
             public uint Flags;
             public bool Permanent;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct PROCESS_MITIGATION_ASLR_POLICY
+        public struct PROCESS_MITIGATION_ASLR_POLICY
         {
             public uint Flags;
         }
@@ -410,23 +410,23 @@ namespace NativeProcesses.Core.Native
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY
+        public struct PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY
         {
             public uint Flags;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY
+        public struct PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY
         {
             public uint Flags;
         }
-        private enum MEMORY_INFORMATION_CLASS
+        public enum MEMORY_INFORMATION_CLASS
         {
             MemoryBasicInformation = 0
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct MEMORY_BASIC_INFORMATION
+        public struct MEMORY_BASIC_INFORMATION
         {
             public IntPtr BaseAddress;
             public IntPtr AllocationBase;
@@ -531,7 +531,7 @@ namespace NativeProcesses.Core.Native
             }
         }
 
-        private string ConvertNtPathToWin32Path(string ntPath)
+        public string ConvertNtPathToWin32Path(string ntPath)
         {
             EnsureDeviceMap();
 

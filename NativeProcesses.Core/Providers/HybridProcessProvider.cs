@@ -4,12 +4,17 @@
 */
 using NativeProcesses.Core.Engine;
 using System;
+using System.Collections.Generic;
+
 namespace NativeProcesses.Core.Providers
 {
     public class HybridProcessProvider : IProcessEventProvider
     {
         private readonly IProcessEventProvider[] _providers;
         public HybridProcessProvider(params IProcessEventProvider[] providers) { _providers = providers; }
+
+        public IEnumerable<IProcessEventProvider> Providers => _providers;
+
         public void Start(IProcessNotifier notifier, IEngineLogger logger)
         {
             foreach (var p in _providers) p.Start(notifier, logger);

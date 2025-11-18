@@ -17,6 +17,8 @@ using System.Linq;
 using NativeProcesses.Core.Inspection;
 using Microsoft.Diagnostics.Tracing;
 using NativeProcesses.Core.Inspection;
+using static NativeProcesses.Core.Native.ManagedProcess;
+using System.Runtime.InteropServices;
 
 namespace NativeProcesses.Core.Providers
 {
@@ -31,6 +33,98 @@ namespace NativeProcesses.Core.Providers
         private readonly ConcurrentDictionary<int, IoUsageData> _usageData = new ConcurrentDictionary<int, IoUsageData>();
         public event Action<ThreatIntelInfo> ThreatDetected;
         public event Action<NativeHeapAllocationInfo> HeapEventDetected;
+        private readonly ConcurrentDictionary<int, DateTime> _lastAlertTime = new ConcurrentDictionary<int, DateTime>();
+        private readonly TimeSpan _alertCooldown = TimeSpan.FromSeconds(5); // Nur alle 5 Sekunden alarmieren
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern int VirtualQueryEx(IntPtr hProcess, IntPtr lpAddress, out MEMORY_BASIC_INFORMATION lpBuffer, uint dwLength);
+
+        private void OnPerfInfoSample(SampledProfileTraceData data)
+        {
+            // 1. FAST FAIL: Wenn wir den Prozess nicht überwachen, sofort raus.
+            // Das ist nur ein Dictionary-Lookup (Nanosekunden-Bereich).
+            if (!_monitoredHandles.TryGetValue(data.ProcessID, out IntPtr hProcess))
+            {
+                return;
+            }
+            // --- NEU: DEDUPLIZIERUNG (COOLDOWN) ---
+            if (_lastAlertTime.TryGetValue(data.ProcessID, out DateTime lastTime))
+            {
+                if (DateTime.Now - lastTime < _alertCooldown)
+                {
+                    return; // Noch im Cooldown, ignorieren
+                }
+            }
+            // Wenn wir hier sind, ist es ein Prozess, der uns interessiert (Watchlist).
+            try
+            {
+                // Wir nutzen das GECATCHTE Handle. Kein OpenProcess!
+                MEMORY_BASIC_INFORMATION mbi;
+                IntPtr codeAddr = (IntPtr)data.InstructionPointer;
+
+                // 2. VAD Check: Was ist an der Stelle, wo der Code gerade läuft?
+                if (VirtualQueryEx(hProcess, codeAddr, out mbi, (uint)Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION))) != 0)
+                {
+                    // DAS IST DER CHECK:
+                    // CPU sagt: "Ich führe hier Code aus." (Instruction Pointer)
+                    // VAD sagt: "Hier ist nichts (MEM_FREE) oder reserviert (MEM_RESERVE)."
+                    // Das ist physikalisch unmöglich, es sei denn, jemand hat den VAD-Eintrag gelöscht (DKOM Rootkit).
+
+                    if (mbi.State == (uint)MemoryState.MEM_FREE ||
+                        mbi.State == (uint)MemoryState.MEM_RESERVE)
+                    {
+                        // DEDUPLIZIERUNG: Wir wollen nicht 1000 Events pro Sekunde feuern.
+                        // Prüfen, ob wir für diese PID vor kurzem schon alarmiert haben (optional, aber empfohlen)
+                        _lastAlertTime[data.ProcessID] = DateTime.Now;
+
+                        var threatInfo = new ThreatIntelInfo
+                        {
+                            ProcessId = data.ProcessID,
+                            EventName = "DKOM / VAD Unlinking Detected",
+                            ProviderName = "NativeProcesses EDR Logic",
+                            TimeStamp = DateTime.Now,
+                            Detail = $"CPU execution at 0x{codeAddr:X}, but VAD reports Memory State {mbi.State} (Free/Reserve). Hidden Kernel Rootkit activity!"
+                        };
+
+                        // Event feuern -> Das löst dann im MainForm den "Deep Scan" aus
+                        ThreatDetected?.Invoke(threatInfo);
+
+                        // Optional: Monitoring für diesen Prozess kurz pausieren, um Log-Spam zu vermeiden
+                        StopMonitoringPid(data.ProcessID);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private readonly ConcurrentDictionary<int, IntPtr> _monitoredHandles = new ConcurrentDictionary<int, IntPtr>();
+
+        // Wird von der UI/Service aufgerufen, wenn ein Prozess in den "Fokus" rückt
+        public void StartMonitoringPid(int pid)
+        {
+            if (_monitoredHandles.ContainsKey(pid)) return;
+
+            try
+            {
+                // Wir brauchen nur QueryLimitedInformation für VirtualQueryEx
+                // Das ist sehr unauffällig und benötigt keine Admin-Rechte für den eigenen User
+                var handle = OpenProcess(NativeProcesses.Core.Native.ProcessAccessFlags.QueryLimitedInformation, false, pid);
+                if (handle != IntPtr.Zero)
+                {
+                    _monitoredHandles.TryAdd(pid, handle);
+                }
+            }
+            catch { }
+        }
+
+        // Wird aufgerufen, wenn der Prozess den Fokus verliert oder beendet wird
+        public void StopMonitoringPid(int pid)
+        {
+            if (_monitoredHandles.TryRemove(pid, out IntPtr handle))
+            {
+                CloseHandle(handle);
+            }
+        }
 
         private class IoUsageData
         {
@@ -103,10 +197,11 @@ namespace NativeProcesses.Core.Providers
                     using (_session = new TraceEventSession(sessionName))
                     {
                         var keywords = KernelTraceEventParser.Keywords.Process |
-                                                               KernelTraceEventParser.Keywords.DiskIO |
-                                                               KernelTraceEventParser.Keywords.NetworkTCPIP |
-                                                               KernelTraceEventParser.Keywords.MemoryHardFaults |
-                                                               KernelTraceEventParser.Keywords.VirtualAlloc;
+                                       KernelTraceEventParser.Keywords.DiskIO |
+                                       KernelTraceEventParser.Keywords.NetworkTCPIP |
+                                       KernelTraceEventParser.Keywords.MemoryHardFaults |
+                                       KernelTraceEventParser.Keywords.VirtualAlloc |
+                                       KernelTraceEventParser.Keywords.Profile; ;
 
                         _session.EnableKernelProvider(keywords);
                         _session.EnableProvider("Microsoft-Windows-Threat-Intelligence");
@@ -119,6 +214,7 @@ namespace NativeProcesses.Core.Providers
                         _session.Source.Kernel.TcpIpSend += OnNetworkSend;
                         _session.Source.Kernel.TcpIpRecv += OnNetworkReceive;
                         _session.Source.Kernel.MemoryHardFault += OnMemoryHardFault;
+                        _session.Source.Kernel.PerfInfoSample += OnPerfInfoSample;
 
                         _session.Source.Kernel.VirtualMemAlloc += OnVirtualAlloc;
                         _session.Source.Kernel.VirtualMemFree += OnVirtualFree; // Verweist jetzt auf die korrigierte Methode

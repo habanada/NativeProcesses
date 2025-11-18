@@ -42,6 +42,9 @@ namespace ProcessDemo
             this.splitContainer1 = new System.Windows.Forms.SplitContainer();
             this.grid = new System.Windows.Forms.DataGridView();
             this.gridThreads = new System.Windows.Forms.DataGridView();
+            this.chkAutoScanNew = new System.Windows.Forms.CheckBox();
+            this.chkScanSuspicious = new System.Windows.Forms.CheckBox();
+            this.btnScanAll = new System.Windows.Forms.Button();
             this.panel1.SuspendLayout();
             this.panel4.SuspendLayout();
             this.panel3.SuspendLayout();
@@ -70,7 +73,7 @@ namespace ProcessDemo
             this.panel1.Dock = System.Windows.Forms.DockStyle.Top;
             this.panel1.Location = new System.Drawing.Point(0, 0);
             this.panel1.Name = "panel1";
-            this.panel1.Size = new System.Drawing.Size(800, 33);
+            this.panel1.Size = new System.Drawing.Size(800, 52);
             this.panel1.TabIndex = 2;
             // 
             // panel4
@@ -79,7 +82,7 @@ namespace ProcessDemo
             this.panel4.Dock = System.Windows.Forms.DockStyle.Left;
             this.panel4.Location = new System.Drawing.Point(0, 0);
             this.panel4.Name = "panel4";
-            this.panel4.Size = new System.Drawing.Size(107, 33);
+            this.panel4.Size = new System.Drawing.Size(107, 52);
             this.panel4.TabIndex = 6;
             // 
             // lblFilter
@@ -93,11 +96,14 @@ namespace ProcessDemo
             // 
             // panel3
             // 
+            this.panel3.Controls.Add(this.btnScanAll);
+            this.panel3.Controls.Add(this.chkScanSuspicious);
+            this.panel3.Controls.Add(this.chkAutoScanNew);
             this.panel3.Controls.Add(this.edtFilter);
             this.panel3.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panel3.Location = new System.Drawing.Point(0, 0);
             this.panel3.Name = "panel3";
-            this.panel3.Size = new System.Drawing.Size(800, 33);
+            this.panel3.Size = new System.Drawing.Size(800, 52);
             this.panel3.TabIndex = 5;
             // 
             // edtFilter
@@ -111,9 +117,9 @@ namespace ProcessDemo
             // 
             this.panel2.Controls.Add(this.splitContainer1);
             this.panel2.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.panel2.Location = new System.Drawing.Point(0, 33);
+            this.panel2.Location = new System.Drawing.Point(0, 52);
             this.panel2.Name = "panel2";
-            this.panel2.Size = new System.Drawing.Size(800, 321);
+            this.panel2.Size = new System.Drawing.Size(800, 302);
             this.panel2.TabIndex = 3;
             // 
             // splitContainer1
@@ -129,7 +135,7 @@ namespace ProcessDemo
             // splitContainer1.Panel2
             // 
             this.splitContainer1.Panel2.Controls.Add(this.gridThreads);
-            this.splitContainer1.Size = new System.Drawing.Size(800, 321);
+            this.splitContainer1.Size = new System.Drawing.Size(800, 302);
             this.splitContainer1.SplitterDistance = 500;
             this.splitContainer1.TabIndex = 2;
             // 
@@ -139,7 +145,7 @@ namespace ProcessDemo
             this.grid.Dock = System.Windows.Forms.DockStyle.Fill;
             this.grid.Location = new System.Drawing.Point(0, 0);
             this.grid.Name = "grid";
-            this.grid.Size = new System.Drawing.Size(500, 321);
+            this.grid.Size = new System.Drawing.Size(500, 302);
             this.grid.TabIndex = 2;
             // 
             // gridThreads
@@ -148,8 +154,38 @@ namespace ProcessDemo
             this.gridThreads.Dock = System.Windows.Forms.DockStyle.Fill;
             this.gridThreads.Location = new System.Drawing.Point(0, 0);
             this.gridThreads.Name = "gridThreads";
-            this.gridThreads.Size = new System.Drawing.Size(296, 321);
+            this.gridThreads.Size = new System.Drawing.Size(296, 302);
             this.gridThreads.TabIndex = 3;
+            // 
+            // chkAutoScanNew
+            // 
+            this.chkAutoScanNew.AutoSize = true;
+            this.chkAutoScanNew.Location = new System.Drawing.Point(113, 29);
+            this.chkAutoScanNew.Name = "chkAutoScanNew";
+            this.chkAutoScanNew.Size = new System.Drawing.Size(153, 17);
+            this.chkAutoScanNew.TabIndex = 3;
+            this.chkAutoScanNew.Text = "Auto-Scan New Processes";
+            this.chkAutoScanNew.UseVisualStyleBackColor = true;
+            // 
+            // chkScanSuspicious
+            // 
+            this.chkScanSuspicious.AutoSize = true;
+            this.chkScanSuspicious.Location = new System.Drawing.Point(272, 29);
+            this.chkScanSuspicious.Name = "chkScanSuspicious";
+            this.chkScanSuspicious.Size = new System.Drawing.Size(227, 17);
+            this.chkScanSuspicious.TabIndex = 4;
+            this.chkScanSuspicious.Text = "Trigger Scan on Suspicious Activity (ETW)";
+            this.chkScanSuspicious.UseVisualStyleBackColor = true;
+            // 
+            // btnScanAll
+            // 
+            this.btnScanAll.Location = new System.Drawing.Point(511, 28);
+            this.btnScanAll.Name = "btnScanAll";
+            this.btnScanAll.Size = new System.Drawing.Size(148, 23);
+            this.btnScanAll.TabIndex = 5;
+            this.btnScanAll.Text = "Deep Scan All Processes";
+            this.btnScanAll.UseVisualStyleBackColor = true;
+            this.btnScanAll.Click += new System.EventHandler(this.btnScanAll_Click);
             // 
             // MainForm
             // 
@@ -193,6 +229,9 @@ namespace ProcessDemo
         private System.Windows.Forms.SplitContainer splitContainer1;
         private System.Windows.Forms.DataGridView grid;
         private System.Windows.Forms.DataGridView gridThreads;
+        private System.Windows.Forms.Button btnScanAll;
+        private System.Windows.Forms.CheckBox chkScanSuspicious;
+        private System.Windows.Forms.CheckBox chkAutoScanNew;
     }
 }
 

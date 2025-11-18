@@ -215,6 +215,7 @@
     <Compile Include="Engine\ProcessMonitorEngine.cs" />
     <Compile Include="Engine\ProcessVolatileUpdate.cs" />
     <Compile Include="Engine\SignatureLoader.cs" />
+    <Compile Include="Inspection\AdvancedPeReconstructor.cs" />
     <Compile Include="Inspection\DotNetInspector.cs" />
     <Compile Include="Inspection\DotNetMalwareScanner.cs" />
     <Compile Include="Inspection\FoundPeHeaderInfo.cs" />
@@ -224,12 +225,14 @@
     <Compile Include="Inspection\ParentProcessInspector.cs" />
     <Compile Include="Inspection\PeAnomalyInfo.cs" />
     <Compile Include="Inspection\PeAnomalyScanner.cs" />
+    <Compile Include="Inspection\PeEmulation.cs" />
     <Compile Include="Inspection\PeReconstructor.cs" />
     <Compile Include="Inspection\SecurityInspector.cs" />
     <Compile Include="Inspection\ShellcodeDetector - Kopieren.cs" />
     <Compile Include="Inspection\ShellcodeDetector.cs" />
     <Compile Include="Inspection\SignatureModel.cs" />
     <Compile Include="Inspection\ThreatIntelInfo.cs" />
+    <Compile Include="Inspection\VadScanner.cs" />
     <Compile Include="Models\DotNetAppDomainInfo.cs" />
     <Compile Include="Models\DotNetExceptionInfo.cs" />
     <Compile Include="Models\DotNetFinalizerInfo.cs" />
@@ -243,6 +246,7 @@
     <Compile Include="Models\ExtendedThreadInfo.cs" />
     <Compile Include="Models\NativeHandleInfo.cs" />
     <Compile Include="Models\NetworkConnectionInfo.cs" />
+    <Compile Include="Models\PhantomModuleInfo.cs" />
     <Compile Include="Models\ProcessModuleInfo.cs" />
     <Compile Include="Models\UwpPackageInfo.cs" />
     <Compile Include="Models\VirtualMemoryRegion.cs" />
@@ -258,6 +262,7 @@
     <Compile Include="Native\ProcessSnapshot.cs" />
     <Compile Include="Native\PsApiModuleEnumerator.cs" />
     <Compile Include="Native\PssDefines.cs" />
+    <Compile Include="Native\SnapshotDumper.cs" />
     <Compile Include="Native\User32.cs" />
     <Compile Include="Native\WindowManager.cs" />
     <Compile Include="Inspection\PeStructs.cs" />

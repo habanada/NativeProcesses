@@ -245,14 +245,14 @@ namespace NativeProcesses.Core.Native
             public uint TimeDateStamp;
         }
 
-        // --- Memory Information ---
+        //// --- Memory Information ---
 
-        [StructLayout(LayoutKind.Sequential)]
-        public struct MEMORY_BASIC_INFORMATION_EX
-        {
-            public MEMORY_BASIC_INFORMATION BasicInfo;
-            public uint PartitionId;
-        }
+        //[StructLayout(LayoutKind.Sequential)]
+        //public struct MEMORY_BASIC_INFORMATION_EX
+        //{
+        //    public MEMORY_BASIC_INFORMATION BasicInfo;
+        //    public uint PartitionId;
+        //}
 
         [StructLayout(LayoutKind.Sequential)]
         public struct MEMORY_BASIC_INFORMATION

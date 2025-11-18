@@ -22,6 +22,10 @@ namespace ProcessDemo
 {
     public partial class MainForm : Form
     {
+        private System.Collections.Concurrent.ConcurrentQueue<int> _scanQueue = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        private Timer _scanWorkerTimer;
+        private HashSet<int> _scannedPids = new HashSet<int>(); // Damit wir nicht denselben 100x scannen
+
         private ProcessService _service;
         private BindingList<ProcessInfoViewModel> _allProcessItems;
         private ContextMenuStrip _menu;
@@ -32,6 +36,7 @@ namespace ProcessDemo
         private ProcessMonitorEngine _monitorEngine;
 
         private Button btnNetwork;
+        private int _lastSelectedPid = -1;
 
         public MainForm()
         {
@@ -47,6 +52,68 @@ namespace ProcessDemo
 
             SetupMenu();
             LoadProcesses();
+            SetupAutoScan();
+        }
+        private void SetupAutoScan()
+        {
+            // Timer, der die Queue abarbeitet (z.B. alle 500ms einen Prozess scannen)
+            _scanWorkerTimer = new Timer();
+            _scanWorkerTimer.Interval = 500;
+            _scanWorkerTimer.Tick += ScanWorkerTimer_Tick;
+            _scanWorkerTimer.Start();
+        }
+        private async void ScanWorkerTimer_Tick(object sender, EventArgs e)
+        {
+            if (_scanQueue.TryDequeue(out int pid))
+            {
+                var procItem = _allProcessItems.FirstOrDefault(p => p.Pid == pid);
+                if (procItem == null) return;
+
+                procItem.ScanStatus = "Scanning...";
+
+                try
+                {
+                    var result = await ProcessManager.ScanProcessForHooksAsync(procItem.FullInfo, ScanFlags.All, _logger);
+
+                    if (result.IsHooked)
+                    {
+                        int totalThreats = result.Anomalies.Count + result.InlineHooks.Count + result.IatHooks.Count + result.FoundPeHeaders.Count + result.SuspiciousMemoryRegions.Count + result.SuspiciousThreads.Count;
+                        procItem.ScanStatus = $"DETECTED: {totalThreats} Threats";
+
+                        if (grid.InvokeRequired)
+                        {
+                            grid.Invoke(new Action(() => HighlightInfectedRow(pid)));
+                        }
+                        else
+                        {
+                            HighlightInfectedRow(pid);
+                        }
+
+                        _logger?.Log(LogLevel.Error, $"MALWARE DETECTED in PID {pid}: {totalThreats} indicators found.");
+                    }
+                    else
+                    {
+                        procItem.ScanStatus = "Clean";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    procItem.ScanStatus = "Error";
+                    _logger?.Log(LogLevel.Error, $"Auto-Scan failed for PID {pid}", ex);
+                }
+            }
+        }
+        private void HighlightInfectedRow(int pid)
+        {
+            foreach (DataGridViewRow row in grid.Rows)
+            {
+                if ((row.DataBoundItem as ProcessInfoViewModel)?.Pid == pid)
+                {
+                    row.DefaultCellStyle.BackColor = Color.DarkRed;
+                    row.DefaultCellStyle.ForeColor = Color.White;
+                    row.DefaultCellStyle.SelectionBackColor = Color.Red;
+                }
+            }
         }
         private void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
@@ -185,7 +252,7 @@ namespace ProcessDemo
             if (p.IsMarkedCritical && !isLegitCritical)
             {
                 // VERDÄCHTIG!
-                row.DefaultCellStyle.BackColor = Color.Red;
+                row.DefaultCellStyle.BackColor = Color.Orange;
                 row.DefaultCellStyle.ForeColor = Color.White;
             }
             else
@@ -653,6 +720,15 @@ namespace ProcessDemo
             var p = SelectedProcess;
             if (p != null)
             {
+                // Alten Fokus entfernen (falls vorhanden)
+                // (Du müsstest dir die alte PID merken)
+                if (_lastSelectedPid != -1)
+                {
+                    // Zugriff auf den Provider über _service -> _provider casten oder durchreichen
+                    // Da _provider im Service privat ist, müssen wir eine Methode im Service bauen
+                    _service.StopMonitoringFast(_lastSelectedPid);
+                }
+
                 gridThreads.DataSource = p.Threads;
                 if (!p.AreModulesLoadingOrLoaded)
                 {
@@ -1130,6 +1206,18 @@ namespace ProcessDemo
                 richTextBox1.SelectionColor = Color.Black;
             }
             catch { }
+            try
+            {
+                if (chkScanSuspicious.Checked && info.Protection.Contains("EXECUTE_READWRITE"))
+                {
+                    EnqueueScan(info.ProcessId);
+                    _logger?.Log(LogLevel.Warning, $"Triggering Scan for PID {info.ProcessId} due to RWX allocation!");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Warning, $"Exception with Scan for PID {info.ProcessId} due to RWX allocation!", ex);
+            }
         }
         private void OnThreatDetected(NativeProcesses.Core.Inspection.ThreatIntelInfo info)
         {
@@ -1148,8 +1236,28 @@ namespace ProcessDemo
                 richTextBox1.ScrollToCaret();
                 richTextBox1.SelectionColor = Color.Black;
                 richTextBox1.Font = new Font(richTextBox1.Font, FontStyle.Regular);
+                
+                if (chkScanSuspicious.Checked)
+                {
+                    EnqueueScan(info.ProcessId);
+                    _logger?.Log(LogLevel.Warning, $"Triggering Scan for PID {info.ProcessId} due to Threat Intel Event!");
+                }
             }
-            catch { }
+            catch(Exception ex) {
+                _logger?.Log(LogLevel.Warning, $"Exception OnThreatDetected with Scan for PID {info.ProcessId} due to RWX allocation!", ex);
+            }
+        }
+        private void EnqueueScan(int pid)
+        {
+            // Vermeide Duplikate in kurzer Zeit
+            if (!_scannedPids.Contains(pid))
+            {
+                _scanQueue.Enqueue(pid);
+                _scannedPids.Add(pid);
+
+                // Nach 5 Minuten aus dem Cache löschen, damit er wieder gescannt werden kann
+                Task.Delay(300000).ContinueWith(t => _scannedPids.Remove(pid));
+            }
         }
         private void EnableGridDoubleBuffering(DataGridView dgv)
         {
@@ -1208,6 +1316,12 @@ namespace ProcessDemo
                     var newItem = new ProcessInfoViewModel(info);
                     _allProcessItems.Add(newItem);
                     CheckProcessCriticality(newItem);
+                }
+                if (chkAutoScanNew.Checked)
+                {
+                    // Wir warten kurz (z.B. 2 Sekunden), damit Malware sich entpacken kann.
+                    // Sofortiger Scan findet bei Packern oft nichts, weil der Payload noch nicht im Speicher ist.
+                    Task.Delay(2000).ContinueWith(t => EnqueueScan(info.Pid));
                 }
             }
             catch (Exception ex)
@@ -1423,11 +1537,25 @@ namespace ProcessDemo
             };
             NativeProcesses.Core.Inspection.SignatureLoader.SaveSignaturesEncrypted("signatures.dat", initialSigs);
         }
+
+        private void btnScanAll_Click(object sender, EventArgs e)
+        {
+            foreach (var proc in _allProcessItems)
+            {
+                // Systemprozesse (PID 0, 4) überspringen
+                if (proc.Pid > 4)
+                {
+                    _scanQueue.Enqueue(proc.Pid);
+                }
+            }
+            MessageBox.Show($"Queued {_allProcessItems.Count} processes for deep scan.", "Mass Scan Started");
+        }
     }
 
     public class ConsoleLogger : IEngineLogger
     {
         private RichTextBox _richTextBox;
+
         public ConsoleLogger(RichTextBox richTextBox)
         {
             _richTextBox = richTextBox;
@@ -1435,7 +1563,74 @@ namespace ProcessDemo
 
         public void Log(LogLevel level, string message, Exception ex = null)
         {
-            return;
+            // 1. Prüfung, ob Control noch existiert
+            if (_richTextBox == null || _richTextBox.IsDisposed) return;
+
+            // 2. Thread-Safety: Wenn wir nicht im UI-Thread sind, marshale den Aufruf
+            if (_richTextBox.InvokeRequired)
+            {
+                try
+                {
+                    _richTextBox.BeginInvoke(new Action(() => Log(level, message, ex)));
+                }
+                catch { } // Falls Form währenddessen geschlossen wird
+                return;
+            }
+
+            try
+            {
+                // 3. Farbe basierend auf Level wählen
+                Color color = Color.Black; // Standard (Info)
+
+                // Anpassung für Dark Mode (falls deine RTB dunkel ist, nimm helle Farben)
+                bool isDarkMode = _richTextBox.BackColor.R < 100;
+
+                switch (level)
+                {
+                    case LogLevel.Error:
+                        color = Color.Red;
+                        break;
+                    case LogLevel.Warning:
+                        color = isDarkMode ? Color.Yellow : Color.DarkOrange;
+                        break;
+                    case LogLevel.Debug:
+                        color = Color.Gray;
+                        break;
+                    case LogLevel.Info:
+                        color = isDarkMode ? Color.White : Color.Black;
+                        break;
+                }
+
+                // 4. Formatierung: [Zeit] [Level] Nachricht
+                string timestamp = DateTime.Now.ToString("HH:mm:ss");
+                string prefix = $"[{timestamp}] ";
+
+                // 5. Text anhängen (AppendText ist performanter als Text +=)
+                _richTextBox.SelectionStart = _richTextBox.TextLength;
+                _richTextBox.SelectionLength = 0;
+
+                // Zeitstempel grau
+                _richTextBox.SelectionColor = Color.Gray;
+                _richTextBox.AppendText(prefix);
+
+                // Nachricht in Level-Farbe
+                _richTextBox.SelectionColor = color;
+                _richTextBox.AppendText(message + Environment.NewLine);
+
+                // Exception StackTrace (falls vorhanden)
+                if (ex != null)
+                {
+                    _richTextBox.SelectionColor = Color.DarkRed; // oder ein dunkleres Rot
+                    _richTextBox.AppendText(ex.ToString() + Environment.NewLine);
+                }
+
+                // 6. Auto-Scroll zum Ende
+                _richTextBox.ScrollToCaret();
+            }
+            catch (Exception)
+            {
+                // Logging sollte niemals die Anwendung zum Absturz bringen
+            }
         }
     }
 }

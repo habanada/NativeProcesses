@@ -3,6 +3,7 @@
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
 using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Models;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -105,6 +106,73 @@ namespace NativeProcesses.Core.Inspection
             _logger = logger;
         }
 
+        public List<PeAnomalyInfo> CheckSectionPermissionMismatch(
+                    Native.ManagedProcess process,
+                    ProcessModuleInfo module,
+                    List<VirtualMemoryRegion> regions)
+        {
+            var anomalies = new List<PeAnomalyInfo>();
+
+            // Validierung: Existiert die Datei auf der Festplatte?
+            if (string.IsNullOrEmpty(module.FullDllName) || !System.IO.File.Exists(module.FullDllName))
+                return anomalies;
+
+            try
+            {
+                // 1. Lade PE Header von Disk (Fix für CS0103)
+                // Wir nutzen deine existierende private Methode GetPeHeadersFromFile
+                PeStructs.IMAGE_DOS_HEADER dosHeader;
+                PeStructs.IMAGE_FILE_HEADER fileHeader;
+                ushort magic;
+
+                // Hier laden wir die Sektionen in eine Variable
+                var sectionsOnDisk = GetPeHeadersFromFile(module.FullDllName, out dosHeader, out fileHeader, out magic);
+
+                // 2. Iteriere durch die geladenen Sektionen
+                foreach (var section in sectionsOnDisk)
+                {
+                    // Berechne die erwartete Adresse der Sektion im Speicher
+                    // DllBase + VirtualAddress
+                    IntPtr sectionAddress = IntPtr.Add(module.DllBase, (int)section.VirtualAddress);
+
+                    // Finde die korrespondierende Memory Region
+                    // Wir suchen die Region, welche die Startadresse der Sektion beinhaltet.
+                    // Ein direkter Vergleich (==) ist oft zu strikt, da Regionen verschmolzen sein könnten.
+                    var region = regions.FirstOrDefault(r =>
+                        sectionAddress.ToInt64() >= r.BaseAddress.ToInt64() &&
+                        sectionAddress.ToInt64() < (r.BaseAddress.ToInt64() + r.RegionSize));
+
+                    if (region != null)
+                    {
+                        // Prüfe Rechte im Speicher vs. Rechte auf Disk
+                        bool isMemExec = region.Protection.ToUpper().Contains("EXECUTE");
+
+                        // IMAGE_SCN_MEM_EXECUTE = 0x20000000
+                        bool isDiskExec = (section.Characteristics & 0x20000000) != 0;
+
+                        // ALARM: Sektion ist auf Disk NUR Daten (z.B. .data), aber im RAM ausführbar (EXECUTE)!
+                        // Das ist ein starkes Indikator für Shellcode-Injektion oder Stomping.
+                        if (isMemExec && !isDiskExec)
+                        {
+                            anomalies.Add(new PeAnomalyInfo
+                            {
+                                ModuleName = module.BaseDllName,
+                                AnomalyType = "Permission Mismatch",
+                                Details = $"Section {section.Name} is EXECUTE in memory but DATA on disk. Potential Stomping/Shellcode.",
+                                Severity = "High"
+                            });
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Fehler beim Lesen der Datei oder Parsen abfangen, damit der Scan nicht abstürzt
+                _logger?.Log(LogLevel.Debug, $"CheckSectionPermissionMismatch failed for {module.BaseDllName}: {ex.Message}", ex);
+            }
+
+            return anomalies;
+        }
         private T ByteArrayToStructure<T>(byte[] bytes, int offset = 0) where T : struct
         {
             GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
@@ -590,241 +658,284 @@ namespace NativeProcesses.Core.Inspection
             throw new Exception($"Section '{sectionName}' not found.");
         }
         public List<IatHookInfo> CheckIatHooks(Native.ManagedProcess process,
-                                                      IntPtr moduleToScanBase,
-                                                      string moduleToScanName,
-                                                      Dictionary<string, IntPtr> ntdllExports,
-                                                      List<NativeProcesses.Core.Models.ProcessModuleInfo> allModules,
-                                                      List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
+                                        IntPtr moduleToScanBase,
+                                        string moduleToScanName,
+                                        Dictionary<string, IntPtr> ntdllExports, // Optimierung für ntdll
+                                        List<NativeProcesses.Core.Models.ProcessModuleInfo> allModules,
+                                        List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
         {
             var results = new List<IatHookInfo>();
             bool isWow64 = process.GetIsWow64();
+            int ptrSize = isWow64 ? 4 : 8;
 
-            // HASHEREZADE OPTIMIERUNG: Module Bounds Cache erstellen
-            // Wir mappen "dllname.dll" -> (Start, Ende) für O(1) Range Checks.
-            var moduleBounds = new Dictionary<string, Tuple<long, long>>(StringComparer.OrdinalIgnoreCase);
+            // Cache für Module Bounds (für schnellen Range Check)
+            var moduleBounds = new Dictionary<string, NativeProcesses.Core.Models.ProcessModuleInfo>(StringComparer.OrdinalIgnoreCase);
             foreach (var mod in allModules)
             {
                 if (!moduleBounds.ContainsKey(mod.BaseDllName))
-                {
-                    long start = mod.DllBase.ToInt64();
-                    long end = start + mod.SizeOfImage;
-                    moduleBounds[mod.BaseDllName] = new Tuple<long, long>(start, end);
-                }
+                    moduleBounds[mod.BaseDllName] = mod;
             }
 
             try
             {
-                byte[] dosHeaderBytes = process.ReadMemory(moduleToScanBase, Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER)));
-                var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(dosHeaderBytes);
+                // 1. Import Directory finden
+                var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(process.ReadMemory(moduleToScanBase, Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER))));
                 if (!dosHeader.IsValid) return results;
 
                 IntPtr ntHeaderAddr = IntPtr.Add(moduleToScanBase, dosHeader.e_lfanew);
-                byte[] ntHeaderMagicBytes = process.ReadMemory(IntPtr.Add(ntHeaderAddr, 4 + Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER))), sizeof(ushort));
-                ushort magic = BitConverter.ToUInt16(ntHeaderMagicBytes, 0);
 
-                PeStructs.IMAGE_DATA_DIRECTORY importDirectory;
-                if (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+                // Magic lesen um 32/64 bit zu unterscheiden
+                ushort magic = BitConverter.ToUInt16(process.ReadMemory(IntPtr.Add(ntHeaderAddr, 24), 2), 0);
+                bool is64BitPE = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+
+                PeStructs.IMAGE_DATA_DIRECTORY importDir;
+                if (is64BitPE)
                 {
-                    byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS64)));
-                    importDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS64>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_IMPORT];
+                    var nt64 = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS64>(process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS64))));
+                    importDir = nt64.OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_IMPORT];
                 }
                 else
                 {
-                    byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS32)));
-                    importDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS32>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_IMPORT];
+                    var nt32 = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS32>(process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS32))));
+                    importDir = nt32.OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_IMPORT];
                 }
 
-                if (importDirectory.VirtualAddress == 0) return results;
+                if (importDir.VirtualAddress == 0 || importDir.Size == 0) return results;
 
-                IntPtr importDescAddr = IntPtr.Add(moduleToScanBase, (int)importDirectory.VirtualAddress);
-                int importDescSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_IMPORT_DESCRIPTOR));
+                // 2. Durch Import Descriptors iterieren
+                IntPtr importDescAddr = IntPtr.Add(moduleToScanBase, (int)importDir.VirtualAddress);
+                int descriptorSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_IMPORT_DESCRIPTOR));
 
-                for (int descIndex = 0; descIndex < 500; descIndex++) // Safety limit
+                while (true)
                 {
-                    byte[] importDescBytes = process.ReadMemory(IntPtr.Add(importDescAddr, descIndex * importDescSize), importDescSize);
-                    var importDesc = ByteArrayToStructure<PeStructs.IMAGE_IMPORT_DESCRIPTOR>(importDescBytes);
+                    var desc = ByteArrayToStructure<PeStructs.IMAGE_IMPORT_DESCRIPTOR>(process.ReadMemory(importDescAddr, descriptorSize));
+                    if (desc.Name == 0 && desc.FirstThunk == 0) break; // Ende der Tabelle
 
-                    if (importDesc.Name == 0 && importDesc.FirstThunk == 0) break;
+                    string dllName = ReadNullTerminatedString(process, IntPtr.Add(moduleToScanBase, (int)desc.Name));
 
-                    string importedDllName = ReadNullTerminatedString(process, IntPtr.Add(moduleToScanBase, (int)importDesc.Name));
+                    // Holen uns das Ziel-Modul (aus dem Snapshot!)
+                    NativeProcesses.Core.Models.ProcessModuleInfo targetModule = null;
+                    moduleBounds.TryGetValue(dllName, out targetModule);
 
-                    // OPTIMIERUNG 1: Wir holen uns direkt die Grenzen der importierten DLL
-                    long validStart = 0;
-                    long validEnd = 0;
-                    bool limitsFound = false;
+                    // IAT (FirstThunk) und INT (OriginalFirstThunk)
+                    IntPtr thunkAddr = IntPtr.Add(moduleToScanBase, (int)desc.FirstThunk);
+                    IntPtr originalThunkAddr = IntPtr.Add(moduleToScanBase, (int)(desc.OriginalFirstThunk != 0 ? desc.OriginalFirstThunk : desc.FirstThunk));
 
-                    if (moduleBounds.TryGetValue(importedDllName, out var bounds))
+                    int thunkIndex = 0;
+                    while (true)
                     {
-                        validStart = bounds.Item1;
-                        validEnd = bounds.Item2;
-                        limitsFound = true;
-                    }
+                        // Lese Pointer aus IAT (Das ist die Adresse, wo der Code hinspringt)
+                        ulong funcAddrVal = ReadUIntPtr(process, thunkAddr, isWow64);
 
-                    uint originalFirstThunkRva = importDesc.OriginalFirstThunk == 0 ? importDesc.FirstThunk : importDesc.OriginalFirstThunk;
-                    IntPtr iatAddress = IntPtr.Add(moduleToScanBase, (int)importDesc.FirstThunk);
+                        // Lese Pointer aus INT (Das ist der Name der Funktion)
+                        ulong originalDataVal = ReadUIntPtr(process, originalThunkAddr, isWow64);
 
-                    // Wir lesen die ganze IAT-Tabelle für diese DLL am Stück (Bulk Read), statt Eintrag für Eintrag.
-                    // Annahme: Max 1000 Funktionen pro DLL -> 8000 Bytes (x64).
-                    int maxEntries = 1000;
-                    int ptrSize = isWow64 ? 4 : 8;
-                    byte[] iatBlock = process.ReadMemory(iatAddress, maxEntries * ptrSize);
+                        if (funcAddrVal == 0) break; // Ende der IAT für diese DLL
 
-                    for (int thunkIndex = 0; thunkIndex < maxEntries; thunkIndex++)
-                    {
-                        ulong thunkValue;
-                        if (isWow64)
-                            thunkValue = BitConverter.ToUInt32(iatBlock, thunkIndex * 4);
-                        else
-                            thunkValue = BitConverter.ToUInt64(iatBlock, thunkIndex * 8);
+                        IntPtr actualAddress = (IntPtr)funcAddrVal;
 
-                        if (thunkValue == 0) break; // Ende der Tabelle
-
-                        IntPtr actualAddressInIat = (IntPtr)thunkValue;
-                        long addrVal = actualAddressInIat.ToInt64();
-
-                        // --- HASHEREZADE CHECK ---
-                        // Liegt die Adresse im Bereich der importierten DLL?
-                        if (limitsFound)
+                        // --- PRE-FILTER (PERFORMANCE) ---
+                        // Wenn die Adresse direkt im Zielmodul liegt, ist es zu 99.9% kein Hook.
+                        // Das spart uns das teure Auflösen des Exports.
+                        bool isInRange = false;
+                        if (targetModule != null)
                         {
-                            if (addrVal >= validStart && addrVal < validEnd)
+                            long start = targetModule.DllBase.ToInt64();
+                            long end = start + targetModule.SizeOfImage;
+                            if ((long)funcAddrVal >= start && (long)funcAddrVal < end)
                             {
-                                // JA: Adresse zeigt in die korrekte DLL. Das ist zu 99.9% legitim.
-                                // Wir überspringen den teuren Namens-Lookup!
-                                continue;
+                                isInRange = true;
                             }
                         }
 
-                        // --- ANOMALIE GEFUNDEN ---
-                        // Die Adresse liegt NICHT in der Ziel-DLL.
-                        // Das kann zwei Gründe haben:
-                        // 1. Es ist ein "Forwarder" (z.B. Kernel32 leitet an Ntdll weiter). Legitim.
-                        // 2. Es ist ein Hook (Shellcode oder fremde DLL). Malicious.
-
-                        // JETZT machen wir den teuren Lookup, um zu sehen was es ist.
-                        string functionName = GetImportName(process, moduleToScanBase, originalFirstThunkRva, thunkIndex, isWow64);
-                        if (functionName.StartsWith("Ordinal") || functionName == "[Error]") continue;
-
-                        // Spezialfall NTDLL: Die haben wir gecached.
-                        if (importedDllName.Equals("ntdll.dll", StringComparison.OrdinalIgnoreCase))
+                        // Wenn es NICHT im Range ist, MUSS es untersucht werden (Hook oder Forwarder?)
+                        if (!isInRange)
                         {
-                            if (ntdllExports.TryGetValue(functionName, out IntPtr expectedAddress))
+                            string funcName = GetImportName(process, moduleToScanBase, (uint)(desc.OriginalFirstThunk != 0 ? desc.OriginalFirstThunk : desc.FirstThunk), thunkIndex, isWow64);
+
+                            if (funcName != "[Error]" && !string.IsNullOrEmpty(funcName))
                             {
-                                if (actualAddressInIat != expectedAddress)
+                                // 3. RESOLVE (Die Wahrheit herausfinden)
+                                // Wo SOLLTE die Funktion eigentlich liegen?
+                                IntPtr expectedAddress = IntPtr.Zero;
+
+                                // Optimierung für NTDLL (haben wir schon gecached)
+                                if (dllName.Equals("ntdll.dll", StringComparison.OrdinalIgnoreCase) && ntdllExports.ContainsKey(funcName))
                                 {
-                                    string targetModule = ResolveTargetAddress(actualAddressInIat,process, allModules, regions);
+                                    expectedAddress = ntdllExports[funcName];
+                                }
+                                else if (targetModule != null)
+                                {
+                                    // Teure Operation: Export im Zielmodul suchen (rekursiv für Forwarder!)
+                                    // Wir nutzen deine verbesserte ResolveExportAddressInternal Methode
+                                    expectedAddress = GetExportAddress(process, targetModule.DllBase, funcName, allModules);
+                                }
+
+                                // 4. VERGLEICH
+                                if (expectedAddress != IntPtr.Zero && actualAddress != expectedAddress)
+                                {
+                                    // Abweichung! IAT zeigt woanders hin als Export Table sagt.
+                                    string targetLocation = ResolveTargetAddress(actualAddress, process, allModules, regions);
+
+                                    // Filtern: Manchmal sind Differenzen legitime interne Redirects.
+                                    // Aber wenn das Ziel "PRIVATE_MEMORY" oder "UNKNOWN" ist -> 100% Malware.
+                                    // Wenn das Ziel ein anderes Modul ist, könnte es ein Hook sein (z.B. Antivirus, EDR oder Malware).
+
                                     results.Add(new IatHookInfo
                                     {
                                         ModuleName = moduleToScanName,
-                                        FunctionName = functionName,
+                                        FunctionName = $"{dllName}!{funcName}",
                                         ExpectedAddress = expectedAddress,
-                                        ActualAddress = actualAddressInIat,
-                                        TargetModule = targetModule
+                                        ActualAddress = actualAddress,
+                                        TargetModule = targetLocation
                                     });
                                 }
+                                else if (expectedAddress == IntPtr.Zero)
+                                {
+                                    // Wir konnten die Adresse nicht auflösen (z.B. Import existiert nicht mehr oder Forwarder Chain broken).
+                                    // Wenn es auf Private Memory zeigt -> Trotzdem melden!
+                                    string targetLocation = ResolveTargetAddress(actualAddress, process, allModules, regions);
+                                    if (targetLocation.StartsWith("PRIVATE_MEMORY"))
+                                    {
+                                        results.Add(new IatHookInfo
+                                        {
+                                            ModuleName = moduleToScanName,
+                                            FunctionName = $"{dllName}!{funcName}",
+                                            ExpectedAddress = IntPtr.Zero,
+                                            ActualAddress = actualAddress,
+                                            TargetModule = targetLocation
+                                        });
+                                    }
+                                }
                             }
-                            continue;
                         }
 
-                        // Für andere DLLs (z.B. Kernel32 Forwarders):
-                        // Wir prüfen, ob die Adresse zumindest in IRGENDEINER bekannten DLL liegt.
-                        string targetModName = ResolveTargetAddress(actualAddressInIat, process, allModules, regions);
-
-                        if (targetModName.StartsWith("PRIVATE_MEMORY") || targetModName == "UNKNOWN_REGION")
-                        {
-                            // TREFFER! Adresse zeigt auf Heap/Stack/Unbekannt -> HOOK!
-                            results.Add(new IatHookInfo
-                            {
-                                ModuleName = moduleToScanName,
-                                FunctionName = $"{importedDllName}!{functionName}", // Zeige Herkunft
-                                ExpectedAddress = IntPtr.Zero, // Unbekannt ohne EAT Parsing
-                                ActualAddress = actualAddressInIat,
-                                TargetModule = targetModName
-                            });
-                        }
-                        // Falls es auf ein anderes Modul zeigt (z.B. ntdll), ist es wahrscheinlich ein Forwarder.
-                        // Wir ignorieren das hier aus Performance-Gründen, da legitime Forwarders sehr häufig sind.
+                        thunkAddr = IntPtr.Add(thunkAddr, ptrSize);
+                        originalThunkAddr = IntPtr.Add(originalThunkAddr, ptrSize);
+                        thunkIndex++;
                     }
+
+                    importDescAddr = IntPtr.Add(importDescAddr, descriptorSize);
                 }
             }
             catch (Exception ex)
             {
-                // _logger?.Log(LogLevel.Error, $"CheckIatHooks error {moduleToScanName}", ex);
+                _logger?.Log(LogLevel.Debug, $"IAT Scan failed for {moduleToScanName}: {ex.Message}", null);
             }
+
             return results;
-        }
+        }        
+
         public List<InlineHookInfo> CheckForInlineHooks(Native.ManagedProcess process,
-                                                                IntPtr moduleBase,
-                                                                string modulePath,
-                                                                List<NativeProcesses.Core.Models.ProcessModuleInfo> modules,
-                                                                List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
+                                                        IntPtr moduleBase,
+                                                        string modulePath,
+                                                        List<NativeProcesses.Core.Models.ProcessModuleInfo> modules,
+                                                        List<NativeProcesses.Core.Models.VirtualMemoryRegion> regions)
         {
             var results = new List<InlineHookInfo>();
-            bool firstHookLogged = false;
+
+            if (string.IsNullOrEmpty(modulePath) || !System.IO.File.Exists(modulePath))
+                return results;
+
             try
             {
-                var memSections = GetPeHeadersFromMemory(process, moduleBase, out _, out _, out ushort magic, out PeStructs.IMAGE_DATA_DIRECTORY memRelocDir);
-                bool isWow64 = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR32_MAGIC);
-
-                HashSet<uint> relocOffsets = ParseRelocations(process, moduleBase, memRelocDir, isWow64);
-
-                var fileSections = GetPeHeadersFromFile(modulePath, out _, out _, out _);
-
-                var fileTextSection = FindSection(fileSections, ".text");
-                var memTextSection = FindSection(memSections, ".text");
-
-                if (fileTextSection.SizeOfRawData == 0 || memTextSection.VirtualSize == 0)
+                // 1. Emuliere den Windows Loader: Lade Datei und patche Relocations lokal
+                // Das Ergebnis (localMappedImage) sollte jetzt identisch zum Speicher sein (bis auf Hooks & Variablen)
+                byte[] localMappedImage = null;
+                try
                 {
+                    localMappedImage = PeEmulation.MapAndRelocate(modulePath, moduleBase);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Log(LogLevel.Debug, $"PeEmulation failed for {modulePath}: {ex.Message}", null);
                     return results;
                 }
 
-                uint sizeToCompare = Math.Min(fileTextSection.SizeOfRawData, memTextSection.VirtualSize);
-                byte[] fileBytes = ReadBytesFromFile(modulePath, fileTextSection.PointerToRawData, sizeToCompare);
-                byte[] memBytes = process.ReadMemory(IntPtr.Add(moduleBase, (int)memTextSection.VirtualAddress), (int)sizeToCompare);
+                // 2. Hole PE Header aus dem lokalen Image (wir brauchen die Sektionen)
+                var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(localMappedImage, 0);
+                int ntOffset = dosHeader.e_lfanew;
 
-                for (int i = 0; i < sizeToCompare; i++)
+                // Prüfe Magic für 32/64 Bit (Offset 24 nach NT Signature)
+                // Signature (4) + FileHeader (20) = 24
+                ushort magic = BitConverter.ToUInt16(localMappedImage, ntOffset + 24);
+                bool is64Bit = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+
+                // Sektionen finden
+                // FileHeader (20 Bytes) ist bei ntOffset + 4
+                ushort numberOfSections = BitConverter.ToUInt16(localMappedImage, ntOffset + 4 + 2);
+                ushort sizeOfOptionalHeader = BitConverter.ToUInt16(localMappedImage, ntOffset + 4 + 16);
+                int sectionHeadersOffset = ntOffset + 24 + sizeOfOptionalHeader;
+
+                // 3. Nur Executable Sections (.text) vergleichen
+                int sectionSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_SECTION_HEADER));
+
+                for (int i = 0; i < numberOfSections; i++)
                 {
-                    uint currentRva = memTextSection.VirtualAddress + (uint)i;
+                    var sec = ByteArrayToStructure<PeStructs.IMAGE_SECTION_HEADER>(localMappedImage, sectionHeadersOffset + (i * sectionSize));
 
-                    if (relocOffsets.Contains(currentRva))
-                    {
-                        continue;
-                    }
+                    // Check for Executable flag (0x20000000)
+                    bool isExecutable = (sec.Characteristics & 0x20000000) != 0;
 
-                    if (fileBytes[i] != memBytes[i])
+                    // Wir scannen in der Regel nur ausführbare Sektionen auf Inline Hooks
+                    if (isExecutable && sec.VirtualSize > 0)
                     {
-                        // HOOK GEFUNDEN! Jetzt analysieren
-                        var hookInfo = AnalyzeHook(process, memBytes, i, IntPtr.Add(moduleBase, (int)currentRva), isWow64);
-                        if (hookInfo != null)
+                        // Adressen berechnen
+                        IntPtr remoteSectionAddress = IntPtr.Add(moduleBase, (int)sec.VirtualAddress);
+
+                        // Remote Memory lesen (vom Snapshot oder Live-Prozess)
+                        // Wir lesen nur so viel, wie wir lokal auch haben
+                        int sizeToCompare = Math.Min((int)sec.VirtualSize, (int)sec.SizeOfRawData);
+                        // Achtung: VirtualSize kann größer sein als RawData (BSS), dort sind Nullen.
+                        // Wir vergleichen nur den Teil, der auf der Platte war.
+
+                        if (sizeToCompare > 0 && (sec.VirtualAddress + sizeToCompare) <= localMappedImage.Length)
                         {
-                            hookInfo.ModuleName = System.IO.Path.GetFileName(modulePath);
-                            hookInfo.SectionName = ".text";
-                            hookInfo.Offset = i;
+                            byte[] remoteBytes = process.ReadMemory(remoteSectionAddress, sizeToCompare);
 
-                            hookInfo.TargetModule = ResolveTargetAddress(hookInfo.TargetAddress,process, modules, regions);
-
-                            results.Add(hookInfo);
-
-                            if (!firstHookLogged)
+                            // 4. Vergleich (Bit-Exact!)
+                            for (int k = 0; k < sizeToCompare; k++)
                             {
-                                _logger?.Log(LogLevel.Warning, $"SecurityInspector: HOOK DETECTED! Type: {hookInfo.HookType} in {modulePath} at .text + 0x{i.ToString("X")}. Target: {hookInfo.TargetModule}", null);
-                                firstHookLogged = true;
-                            }
+                                byte localByte = localMappedImage[sec.VirtualAddress + k];
+                                byte remoteByte = remoteBytes[k];
 
-                            // Zum nächsten Byte *nach* dem Hook springen
-                            i += (hookInfo.HookSize - 1);
+                                if (localByte != remoteByte)
+                                {
+                                    // Hook gefunden!
+                                    // Analysieren (JMP, CALL, etc.)
+                                    IntPtr patchAddress = IntPtr.Add(remoteSectionAddress, k);
+                                    var hookInfo = AnalyzeHook(process, remoteBytes, k, patchAddress, !is64Bit);
+
+                                    if (hookInfo != null)
+                                    {
+                                        hookInfo.ModuleName = System.IO.Path.GetFileName(modulePath);
+                                        hookInfo.SectionName = sec.Name;
+                                        hookInfo.Offset = k;
+                                        hookInfo.OriginalByte = localByte;
+                                        hookInfo.PatchedByte = remoteByte;
+
+                                        // Target auflösen
+                                        hookInfo.TargetModule = ResolveTargetAddress(hookInfo.TargetAddress, process, modules, regions);
+
+                                        results.Add(hookInfo);
+
+                                        // Log
+                                         _logger?.Log(LogLevel.Warning, $"Hook in {hookInfo.ModuleName} at +0x{k:X}: {hookInfo.HookType} -> {hookInfo.TargetModule}");
+
+                                        // Skip der Hook-Größe, um nicht jedes Byte einzeln zu melden
+                                        k += (hookInfo.HookSize - 1);
+                                    }
+                                }
+                            }
                         }
                     }
-                }
-
-                if (results.Count > 1 && firstHookLogged)
-                {
-                    _logger?.Log(LogLevel.Warning, $"SecurityInspector: Full scan complete. Found {results.Count} total hooks in {modulePath} .text section.", null);
                 }
             }
             catch (Exception ex)
             {
-                _logger?.Log(LogLevel.Error, $"SecurityInspector.CheckForInlineHooks failed for {modulePath}", ex);
+                _logger?.Log(LogLevel.Error, $"CheckForInlineHooks failed for {modulePath}", ex);
             }
+
             return results;
         }
         private InlineHookInfo AnalyzeHook(Native.ManagedProcess process, byte[] memBytes, int offset, IntPtr patchAddress, bool isWow64)

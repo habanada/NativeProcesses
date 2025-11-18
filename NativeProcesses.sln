@@ -29,6 +29,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MalwareSimulator", "MalwareSimulator\MalwareSimulator.csproj", "{73556B85-2A5E-47EB-B944-C7AB14B28354}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FilelessSimulator", "FilelessSimulator\FilelessSimulator.csproj", "{DCBE6815-9F8D-424E-9ECF-D2A58AA3166A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -59,6 +61,10 @@ Global
 		{73556B85-2A5E-47EB-B944-C7AB14B28354}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{73556B85-2A5E-47EB-B944-C7AB14B28354}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{73556B85-2A5E-47EB-B944-C7AB14B28354}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DCBE6815-9F8D-424E-9ECF-D2A58AA3166A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DCBE6815-9F8D-424E-9ECF-D2A58AA3166A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DCBE6815-9F8D-424E-9ECF-D2A58AA3166A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DCBE6815-9F8D-424E-9ECF-D2A58AA3166A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -68,6 +74,7 @@ Global
 		{A4701A32-5F3D-40B5-A3FF-DBBBD7CA05C6} = {4F25063D-CD45-4CF5-927A-DE488E6C6FD5}
 		{B81503F8-2386-47D9-BF0A-A207716867FF} = {4F25063D-CD45-4CF5-927A-DE488E6C6FD5}
 		{73556B85-2A5E-47EB-B944-C7AB14B28354} = {4F25063D-CD45-4CF5-927A-DE488E6C6FD5}
+		{DCBE6815-9F8D-424E-9ECF-D2A58AA3166A} = {4F25063D-CD45-4CF5-927A-DE488E6C6FD5}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {73A91E19-FD48-4320-8A48-9FF25FBEEEBD}
