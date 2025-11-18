@@ -196,15 +196,27 @@ namespace NativeProcesses.Core.Providers
                     // Starte die ETW-Session für ZUKÜNFTIGE Updates
                     using (_session = new TraceEventSession(sessionName))
                     {
-                        var keywords = KernelTraceEventParser.Keywords.Process |
+                        var keywords = 
+                                       KernelTraceEventParser.Keywords.Process |
                                        KernelTraceEventParser.Keywords.DiskIO |
                                        KernelTraceEventParser.Keywords.NetworkTCPIP |
                                        KernelTraceEventParser.Keywords.MemoryHardFaults |
                                        KernelTraceEventParser.Keywords.VirtualAlloc |
-                                       KernelTraceEventParser.Keywords.Profile; ;
+                                       KernelTraceEventParser.Keywords.Profile
+                                       ;
 
                         _session.EnableKernelProvider(keywords);
-                        _session.EnableProvider("Microsoft-Windows-Threat-Intelligence");
+                        // ATTENTION: This specific ETW provider is often restricted by Windows
+                        // or already exclusively acquired by high-privilege EDR/Anti-Malware
+                        // solutions (like Sophos, Defender, etc.) that run with Protected
+                        // Process Light (PPL) level. Attempting to enable it may result in
+                        // an 'ACCESS_DENIED' exception (0x80070005), even when running as Administrator.
+                        try
+                        {
+                            _session.EnableProvider("Microsoft-Windows-Threat-Intelligence");
+                        }
+                        catch { _logger.Log(LogLevel.Warning, "Insufficient Rights for Microsoft-Windows-Threat-Intelligence"); };
+                        
                         _session.Source.Dynamic.All += OnDynamicThreatEvent;
 
                         _session.Source.Kernel.ProcessStart += OnProcessStart;

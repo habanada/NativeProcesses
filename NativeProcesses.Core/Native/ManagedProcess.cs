@@ -175,8 +175,8 @@ namespace NativeProcesses.Core.Native
 
         #endregion
         #region P/Invoke Kernel32 (AppModel)
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern int GetPackageFullNameFromProcess(
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern int GetPackageFullName(
             IntPtr hProcess,
             ref int packageFullNameLength,
             StringBuilder packageFullName);
@@ -855,7 +855,7 @@ namespace NativeProcesses.Core.Native
             int length = 0;
             StringBuilder sb = new StringBuilder(0);
 
-            int result = GetPackageFullNameFromProcess(this.Handle, ref length, sb);
+            int result = GetPackageFullName(this.Handle, ref length, sb);
 
             if (result == APPMODEL_ERROR_NO_PACKAGE)
             {
@@ -868,7 +868,7 @@ namespace NativeProcesses.Core.Native
             }
 
             sb = new StringBuilder(length);
-            result = GetPackageFullNameFromProcess(this.Handle, ref length, sb);
+            result = GetPackageFullName(this.Handle, ref length, sb);
 
             if (result != 0)
             {
