@@ -6,7 +6,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text;
 using NativeProcesses.Core.Engine;
 using NativeProcesses.Core.Models;
 using NativeProcesses.Core.Native;
@@ -22,6 +21,7 @@ namespace NativeProcesses.Core.Inspection
         public string NtPath;
         public bool IsExecutable;
         public string DetectionMethod;
+        public string Details;
     }
 
     public class VadScanner
@@ -44,8 +44,6 @@ namespace NativeProcesses.Core.Inspection
 
         /// <summary>
         /// Führt einen tiefen VAD-Walk durch (NtQueryVirtualMemory Loop).
-        /// Das entspricht der Logik deines "alten" Codes, gibt aber eine Liste zurück,
-        /// damit andere Scanner (wie ProcessManager) die Regionen wiederverwenden können.
         /// </summary>
         public List<VirtualMemoryRegion> GetDeepMemoryRegions(ManagedProcess process)
         {
@@ -72,11 +70,10 @@ namespace NativeProcesses.Core.Inspection
                     if (status != 0) break;
 
                     var mbi = Marshal.PtrToStructure<MEMORY_BASIC_INFORMATION>(buffer);
-
                     long size = (long)mbi.RegionSize;
                     if (size <= 0) break;
 
-                    // Wir übernehmen nur "Commit" Pages, genau wie im alten Code
+                    // Nur committed Pages interessieren uns
                     if (mbi.State == (uint)MemoryState.MEM_COMMIT)
                     {
                         regions.Add(new VirtualMemoryRegion(
@@ -108,102 +105,110 @@ namespace NativeProcesses.Core.Inspection
         }
 
         /// <summary>
-        /// Überladung 1: Für Aufrufe ohne vor-geladene Regionen.
-        /// Holt die Regionen selbst (Deep Scan) und ruft dann die Analyse auf.
+        /// Scannt nach Phantom-Modulen (nicht im PEB) und bösartigem privaten Code (Shellcode/Manual Map).
         /// </summary>
-        public List<PhantomModuleInfo> ScanForPhantoms(ManagedProcess process, List<ProcessModuleInfo> pebModules)
+        public List<PhantomModuleInfo> ScanForPhantoms(ManagedProcess process, List<ProcessModuleInfo> pebModules, List<VirtualMemoryRegion> regions = null)
         {
-            // Führe den VAD-Walk durch (entspricht dem while-Loop im alten Code)
-            var regions = GetDeepMemoryRegions(process);
-            // Rufe die Analyse-Logik auf
-            return ScanForPhantoms(process, pebModules, regions);
-        }
+            // Falls keine Regionen übergeben wurden, selbst laden
+            if (regions == null)
+            {
+                regions = GetDeepMemoryRegions(process);
+            }
 
-        /// <summary>
-        /// Akzeptiert bereits geladene Regionen (Performance-Optimierung im ProcessManager).
-        /// Enthält exakt deine alte Detektions-Logik (Case 1 & Case 2).
-        /// </summary>
-        public List<PhantomModuleInfo> ScanForPhantoms(ManagedProcess process, List<ProcessModuleInfo> pebModules, List<VirtualMemoryRegion> regions)
-        {
             var results = new List<PhantomModuleInfo>();
 
-            // Cache für schnelle PEB-Lookups
+            // 1. Cache für schnelle PEB-Lookups (Base Addresses)
             var pebLookup = new HashSet<long>();
             foreach (var mod in pebModules) pebLookup.Add(mod.DllBase.ToInt64());
 
-            // Buffer für Dateinamen (wird wiederverwendet)
             IntPtr nameBuffer = Marshal.AllocHGlobal(1024);
 
             try
             {
                 foreach (var region in regions)
                 {
-                    // Da VirtualMemoryRegion Strings speichert, müssen wir hier prüfen.
-                    // Das entspricht den uint-Checks (MEM_IMAGE, MEM_MAPPED) aus dem alten Code.
-
-                    bool isCommit = region.State.IndexOf("Commit", StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (!isCommit) continue;
-
                     bool isImage = region.Type.IndexOf("Image", StringComparison.OrdinalIgnoreCase) >= 0;
                     bool isMapped = region.Type.IndexOf("Mapped", StringComparison.OrdinalIgnoreCase) >= 0;
                     bool isPrivate = region.Type.IndexOf("Private", StringComparison.OrdinalIgnoreCase) >= 0;
                     bool isExec = region.Protection.IndexOf("EXECUTE", StringComparison.OrdinalIgnoreCase) >= 0;
 
-                    // --- CASE 1: Unlinked Module (Doppelgänging / Herpaderping) ---
-                    // Alter Code: if (mbi.State == MEM_COMMIT && mbi.Type == MEM_IMAGE)
+                    // --- CASE 1: Unlinked Module (Phantom / Doppelgänging) ---
+                    // Der Kernel sagt "Hier ist ein Image (DLL)", aber der PEB kennt es nicht.
                     if (isImage)
                     {
                         long allocBase = region.AllocationBase.ToInt64();
 
-                        // Deduplizierung (damit wir nicht jeden Chunk des gleichen Moduls melden)
+                        // Deduplizierung: Ein Modul besteht aus vielen Chunks, wir melden nur den ersten (Header)
                         if (results.Any(r => r.BaseAddress.ToInt64() == allocBase)) continue;
 
                         if (!pebLookup.Contains(allocBase))
                         {
-                            // ALARM: Kernel sagt Image, PEB sagt nix.
                             string mappedFileName = GetMappedFileName(process.Handle, region.AllocationBase, nameBuffer, 1024);
 
-                            results.Add(new PhantomModuleInfo
+                            // Filtern von harmlosen Images (z.B. sprachabhängige Ressourcen)
+                            if (!mappedFileName.EndsWith(".nls", StringComparison.OrdinalIgnoreCase))
                             {
-                                BaseAddress = region.AllocationBase,
-                                Size = region.RegionSize,
-                                NtPath = mappedFileName,
-                                IsExecutable = isExec,
-                                DetectionMethod = "Phantom Module (Unlinked from PEB)"
-                            });
+                                results.Add(new PhantomModuleInfo
+                                {
+                                    BaseAddress = region.AllocationBase,
+                                    Size = region.RegionSize,
+                                    NtPath = mappedFileName,
+                                    IsExecutable = isExec,
+                                    DetectionMethod = "Phantom Module (Unlinked from PEB)",
+                                    Details = "Module exists in kernel VAD but is hidden from PEB list (Hollowing/Doppelgänging)."
+                                });
+                            }
                         }
                     }
-                    // --- CASE 2: Shamtom / Manual Mapping ---
-                    // Alter Code: else if (mbi.State == MEM_COMMIT && mbi.Type == MEM_MAPPED && Protect == EXECUTE)
-                    // Wir haben hier 'isPrivate' ergänzt, um noch besser zu sein (Standard Manual Mapping ist oft Private).
-                    else if ((isMapped || isPrivate) && isExec)
+                    // --- CASE 2: Private/Mapped Executable Memory (Injection / Shellcode) ---
+                    else if ((isPrivate || isMapped) && isExec)
                     {
-                        // Nur scannen, wenn wir nicht schon einen Treffer an dieser Basisadresse haben
+                        // Wir scannen nur den Anfang der Region (Shellcode Entrypoint ist meist vorne)
                         if (results.Any(r => r.BaseAddress == region.BaseAddress)) continue;
 
-                        // Header Check (MZ)
-                        // Hier müssen wir lesen. 
-                        byte[] header = new byte[2];
+                        // Inhalt lesen für Analyse
+                        byte[] content = null;
                         try
                         {
-                            header = process.ReadMemory(region.BaseAddress, 2);
+                            // Lese max 4KB für Signaturen
+                            content = process.ReadMemory(region.BaseAddress, 4096);
                         }
-                        catch { continue; } // Lesen fehlgeschlagen
+                        catch { continue; }
 
-                        if (header[0] == 'M' && header[1] == 'Z')
+                        if (content == null || content.Length < 64) continue;
+
+                        // A. Check auf "MZ" Header (Manual Mapped PE / Reflective DLL)
+                        if (content[0] == 'M' && content[1] == 'Z')
                         {
                             string mappedFileName = GetMappedFileName(process.Handle, region.BaseAddress, nameBuffer, 1024);
-
-                            string detectionType = isMapped ? "Shamtom (Manually Mapped PE)" : "Shellcode/Manual Map (Private RWX)";
-
                             results.Add(new PhantomModuleInfo
                             {
                                 BaseAddress = region.BaseAddress,
                                 Size = region.RegionSize,
                                 NtPath = mappedFileName,
                                 IsExecutable = true,
-                                DetectionMethod = detectionType
+                                DetectionMethod = "Manually Mapped PE",
+                                Details = "Private memory contains PE Header (MZ). Reflective DLL Injection detected."
                             });
+                            continue;
+                        }
+
+                        // B. Check auf Shellcode (mit neuem Detector)
+                        // Wir filtern JIT Code (Browsers, .NET) hier aus, um False Positives zu vermeiden.
+                        if (ShellcodeDetector.IsLikelyShellcode(content, out string reason))
+                        {
+                            if (reason != "Clean")
+                            {
+                                results.Add(new PhantomModuleInfo
+                                {
+                                    BaseAddress = region.BaseAddress,
+                                    Size = region.RegionSize,
+                                    NtPath = "Private Memory",
+                                    IsExecutable = true,
+                                    DetectionMethod = "Malicious Shellcode Pattern",
+                                    Details = reason // z.B. "Metasploit Pattern" oder "High Entropy"
+                                });
+                            }
                         }
                     }
                 }
@@ -220,10 +225,8 @@ namespace NativeProcesses.Core.Inspection
             return results;
         }
 
-        // Dein alter Helper, exakt übernommen (angepasst für Pointers)
         private string GetMappedFileName(IntPtr hProcess, IntPtr baseAddr, IntPtr buffer, int bufferSize)
         {
-            // Struktur ist UNICODE_STRING gefolgt vom Buffer
             int status = NtQueryVirtualMemory(
                 hProcess,
                 baseAddr,
@@ -235,10 +238,7 @@ namespace NativeProcesses.Core.Inspection
 
             if (status == 0)
             {
-                // Manuelles Auslesen des UNICODE_STRING Structs aus dem Pointer
-                // Auf x64: Length(2) + MaxLen(2) + Padding(4) + Ptr(8) = 16 Bytes
-                // Auf x86: Length(2) + MaxLen(2) + Ptr(4) = 8 Bytes
-
+                // UNICODE_STRING Struktur
                 short length = Marshal.ReadInt16(buffer);
                 IntPtr stringBufferPtr = Marshal.ReadIntPtr(buffer, IntPtr.Size == 8 ? 8 : 4);
 

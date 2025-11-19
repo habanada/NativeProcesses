@@ -762,29 +762,38 @@ namespace NativeProcesses.Core.Native
 
         #region Memory
         #region Memory
-        public byte[] ReadMemory(IntPtr address, int size)
+        public bool TryReadMemory(IntPtr address, int size, out byte[] buffer)
         {
-            byte[] buffer = new byte[size];
+            buffer = new byte[size];
 
-            // Wir nutzen NTAPI statt Kernel32 ReadProcessMemory für mehr Stealth
+            // NTAPI Call (Stealth)
             int status = NtReadVirtualMemory(this.Handle, address, buffer, (uint)size, out uint bytesRead);
 
-            if (status != STATUS_SUCCESS || bytesRead != size)
+            // Erfolgreich gelesen?
+            if (status == STATUS_SUCCESS && bytesRead == size)
             {
-                // Optional: Fallback auf ReadProcessMemory, falls NTAPI fehlschlägt (selten)
-                // Aber für einen Hunter ist ein Fehler hier oft aussagekräftig (Access Denied durch Treiber?)
-
-                // Wir werfen eine Exception nur bei echten Fehlern, um den Scan nicht hart crashen zu lassen,
-                // aber geben leere Daten zurück, wenn z.B. die Seite ausgelagert ist.
-
-                // throw new Win32Exception(Marshal.GetLastWin32Error(), $"NtReadVirtualMemory failed. Status: 0x{status:X}");
-
-                // Besser für Scan-Resilienz: Leeres Array oder Exception, je nach Strategie.
-                // Hier behalten wir die Exception bei, damit der Scanner weiß, dass er nichts lesen konnte.
-                throw new Win32Exception($"NtReadVirtualMemory failed at 0x{address.ToString("X")} with status 0x{status:X}");
+                return true;
             }
 
-            return buffer;
+            // Optional: Fallback auf ReadProcessMemory (Kernel32), falls NTAPI zickt (z.B. AV-Hooking)
+            // In der Regel ist NTAPI aber zuverlässiger.
+
+            buffer = null; // Garbage Collector entlasten
+            return false;
+        }
+        public byte[] ReadMemory(IntPtr address, int size)
+        {
+            // Wir nutzen jetzt intern die sichere Methode
+            if (TryReadMemory(address, size, out byte[] buffer))
+            {
+                return buffer;
+            }
+            
+            // Wenn TryReadMemory fehlschlägt, werfen wir hier die Exception, 
+            // weil der alte Code das so erwartet (z.B. beim Header-Parsing).
+                return null;
+
+            //  throw new Win32Exception($"NtReadVirtualMemory failed at 0x{address.ToString("X")}");
         }
 
         public void WriteMemory(IntPtr address, byte[] data)

@@ -8,14 +8,26 @@ using NativeProcesses.Core;
 using System.Collections.Generic;
 using System.Linq;
 using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Native;
 
 namespace ProcessDemo
 {
     public class ProcessInfoViewModel : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
+        [Browsable(false)]
         public FullProcessInfo FullInfo { get; private set; }
+        [Browsable(false)] 
+        public HookDetectionResult LastScanResult { get; set; }
+        [Browsable(false)]
+        public System.Collections.Generic.List<NativeProcesses.Core.Models.ProcessModuleInfo> Modules { get; private set; }
+        public bool AreModulesLoadingOrLoaded { get; private set; }
 
+        public void SetModules(System.Collections.Generic.List<NativeProcesses.Core.Models.ProcessModuleInfo> modules)
+        {
+            this.Modules = modules;
+            this.AreModulesLoadingOrLoaded = true;
+        }
         private void Notify([CallerMemberName] string prop = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
@@ -343,12 +355,13 @@ namespace ProcessDemo
             get { return _scanStatus; }
             set { _scanStatus = value; Notify(); }
         }
+
         public ProcessInfoViewModel(FullProcessInfo source)
         {
             this.Pid = source.Pid;
             this.Threads = new BindingList<ThreadInfoViewModel>();
             this.ApplyUpdate(source);
-            this.FullInfo = source; 
+            this.FullInfo = source;
         }
         public void ApplyUpdate(FullProcessInfo source)
         {
@@ -456,14 +469,6 @@ namespace ProcessDemo
             this.TotalNetworkRecv = update.TotalNetworkRecv;
         }
 
-        public System.Collections.Generic.List<NativeProcesses.Core.Models.ProcessModuleInfo> Modules { get; private set; }
-        public bool AreModulesLoadingOrLoaded { get; private set; }
-
-        public void SetModules(System.Collections.Generic.List<NativeProcesses.Core.Models.ProcessModuleInfo> modules)
-        {
-            this.Modules = modules;
-            this.AreModulesLoadingOrLoaded = true;
-        }
     }
 
 }

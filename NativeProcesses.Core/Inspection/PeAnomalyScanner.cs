@@ -1,13 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using NativeProcesses.Core.Engine;
 using NativeProcesses.Core.Models;
 using NativeProcesses.Core.Native;
 
 namespace NativeProcesses.Core.Inspection
 {
-
     public class PeAnomalyScanner
     {
         private readonly IEngineLogger _logger;
@@ -28,40 +28,131 @@ namespace NativeProcesses.Core.Inspection
 
             try
             {
-                // 1. Header Reading (Disk vs Memory)
-                byte[] diskHeaderBuffer = ReadHeaderFromDisk(module.FullDllName);
-                byte[] memoryHeaderBuffer = process.ReadMemory(module.DllBase, 4096); // Read first page
+                byte[] diskHeader = ReadHeaderFromDisk(module.FullDllName);
+                byte[] memHeader = process.ReadMemory(module.DllBase, 4096);
 
-                if (diskHeaderBuffer == null || memoryHeaderBuffer == null || diskHeaderBuffer.Length < 512 || memoryHeaderBuffer.Length < 512)
+                if (diskHeader == null || memHeader == null || diskHeader.Length < 512 || memHeader.Length < 512)
                 {
                     return anomalies;
                 }
 
-                // 2. Check Header Stomping (MZ Signature)
-                CheckHeaderStomping(module, diskHeaderBuffer, memoryHeaderBuffer, anomalies);
+                var diskNt = ParseNtHeaders(diskHeader);
+                var memNt = ParseNtHeaders(memHeader);
 
-                // 3. Parse NT Headers for both
-                var diskNtHeaders = ParseNtHeaders(diskHeaderBuffer);
-                var memoryNtHeaders = ParseNtHeaders(memoryHeaderBuffer);
+                int iocScore = 0;
+                string iocDetails = "";
 
-                if (diskNtHeaders.IsValid && memoryNtHeaders.IsValid)
+                if (memHeader[0] != 'M' || memHeader[1] != 'Z')
                 {
-                    // 4. Check Section Anomalies (Phantom Sections / Count Mismatch)
-                    CheckSectionCountMismatch(module, diskNtHeaders, memoryNtHeaders, anomalies);
+                    iocScore += 10;
+                    iocDetails += "[Critical] MZ Signature wiped. ";
+                }
 
-                    // 5. Check EntryPoint Deviation
-                    CheckEntryPointDeviation(module, diskNtHeaders, memoryNtHeaders, anomalies);
+                if (diskNt.IsValid && memNt.IsValid)
+                {
+                    if (memNt.AddressOfEntryPoint != diskNt.AddressOfEntryPoint)
+                    {
+                        iocScore += 3;
+                        iocDetails += $"[Suspicious] EP Modified (Disk: {diskNt.AddressOfEntryPoint:X} != Mem: {memNt.AddressOfEntryPoint:X}). ";
+                    }
 
-                    // 6. Scan Memory Sections for RWX (Read-Write-Execute)
-                    CheckForRwxSections(process, module, memoryHeaderBuffer, memoryNtHeaders, anomalies);
+                    if (memNt.SizeOfImage != diskNt.SizeOfImage)
+                    {
+                        iocScore += 2;
+                        iocDetails += $"[Info] SizeOfImage mismatch. ";
+                    }
+
+                    if (memNt.NumberOfSections != diskNt.NumberOfSections)
+                    {
+                        iocScore += 5;
+                        iocDetails += $"[High] Section Count mismatch ({memNt.NumberOfSections} vs {diskNt.NumberOfSections}). ";
+                    }
+
+                    CheckSections(process, module, memHeader, memNt, anomalies, ref iocScore);
+                }
+                else
+                {
+                    iocScore += 5;
+                    iocDetails += "[High] Invalid NT Headers in memory. ";
+                }
+
+                if (iocScore >= 5)
+                {
+                    anomalies.Add(new PeAnomalyInfo
+                    {
+                        ModuleName = module.BaseDllName,
+                        AnomalyType = iocScore >= 10 ? "Process Hollowing / Stomping" : "Header Anomalies",
+                        Details = $"IOC Score: {iocScore}. {iocDetails}",
+                        Severity = iocScore >= 10 ? "Critical" : "High"
+                    });
                 }
             }
             catch (Exception ex)
             {
-                _logger?.Log(LogLevel.Debug, $"PeAnomalyScanner failed for module {module.BaseDllName}", ex);
+                _logger?.Log(LogLevel.Debug, $"Scan failed for {module.BaseDllName}", ex);
             }
 
             return anomalies;
+        }
+
+        private void CheckSections(ManagedProcess process, ProcessModuleInfo module, byte[] memBuffer, NtHeaderInfo ntInfo, List<PeAnomalyInfo> anomalies, ref int score)
+        {
+            int sectionHeaderOffset = ntInfo.SectionHeaderOffset;
+            int numberOfSections = ntInfo.NumberOfSections;
+            int sectionSize = 40;
+
+            for (int i = 0; i < numberOfSections; i++)
+            {
+                int currentOffset = sectionHeaderOffset + (i * sectionSize);
+                if (currentOffset + sectionSize > memBuffer.Length) break;
+
+                uint virtualAddress = BitConverter.ToUInt32(memBuffer, currentOffset + 12);
+                uint virtualSize = BitConverter.ToUInt32(memBuffer, currentOffset + 8);
+                uint characteristics = BitConverter.ToUInt32(memBuffer, currentOffset + 36);
+
+                string name = System.Text.Encoding.ASCII.GetString(memBuffer, currentOffset, 8).TrimEnd('\0');
+
+                bool isMemExecute = (characteristics & 0x20000000) != 0;
+                bool isMemWrite = (characteristics & 0x80000000) != 0;
+
+                if (isMemExecute && isMemWrite)
+                {
+                    IntPtr sectionAddress = IntPtr.Add(module.DllBase, (int)virtualAddress);
+                    long readSize = Math.Min(virtualSize, 4096);
+
+                    try
+                    {
+                        byte[] content = process.ReadMemory(sectionAddress, (int)readSize);
+
+                        if (ShellcodeDetector.IsLikelyShellcode(content, out string reason))
+                        {
+                            if (reason != "Clean")
+                            {
+                                anomalies.Add(new PeAnomalyInfo
+                                {
+                                    ModuleName = module.BaseDllName,
+                                    AnomalyType = "Malicious RWX Code",
+                                    Details = $"Section '{name}' is RWX. {reason}",
+                                    Severity = "Critical"
+                                });
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                if (name.Equals(".text", StringComparison.OrdinalIgnoreCase) && isMemWrite)
+                {
+                    score += 4;
+                    anomalies.Add(new PeAnomalyInfo
+                    {
+                        ModuleName = module.BaseDllName,
+                        AnomalyType = "Writable Code Section",
+                        Details = $".text section has WRITE permission. Unusual for legit modules.",
+                        Severity = "Medium"
+                    });
+                }
+            }
         }
 
         private byte[] ReadHeaderFromDisk(string path)
@@ -80,161 +171,6 @@ namespace NativeProcesses.Core.Inspection
             }
         }
 
-        private void CheckHeaderStomping(ProcessModuleInfo module, byte[] disk, byte[] memory, List<PeAnomalyInfo> anomalies)
-        {
-            if (disk[0] == 'M' && disk[1] == 'Z')
-            {
-                if (memory[0] != 'M' || memory[1] != 'Z')
-                {
-                    anomalies.Add(new PeAnomalyInfo
-                    {
-                        ModuleName = module.BaseDllName,
-                        AnomalyType = "Header Stomping",
-                        Details = $"MZ signature missing in memory (0x{memory[0]:X} 0x{memory[1]:X}), but present on disk.",
-                        Severity = "High"
-                    });
-                }
-                else
-                {
-                    // Advanced Stomping Check: Compare PE Header Checksum or e_lfanew
-                    int e_lfanew_disk = BitConverter.ToInt32(disk, 0x3C);
-                    int e_lfanew_mem = BitConverter.ToInt32(memory, 0x3C);
-
-                    if (e_lfanew_disk != e_lfanew_mem)
-                    {
-                        anomalies.Add(new PeAnomalyInfo
-                        {
-                            ModuleName = module.BaseDllName,
-                            AnomalyType = "Header Modification",
-                            Details = $"PE Header offset (e_lfanew) modified. Disk: 0x{e_lfanew_disk:X}, Memory: 0x{e_lfanew_mem:X}",
-                            Severity = "Medium"
-                        });
-                    }
-                }
-            }
-        }
-
-        private void CheckSectionCountMismatch(ProcessModuleInfo module, NtHeaderInfo disk, NtHeaderInfo memory, List<PeAnomalyInfo> anomalies)
-        {
-            if (memory.NumberOfSections != disk.NumberOfSections)
-            {
-                anomalies.Add(new PeAnomalyInfo
-                {
-                    ModuleName = module.BaseDllName,
-                    AnomalyType = "Section Count Mismatch",
-                    Details = $"Sections in Memory: {memory.NumberOfSections}, Sections on Disk: {disk.NumberOfSections}. Potential Process Hollowing.",
-                    Severity = "High"
-                });
-            }
-        }
-
-        private void CheckEntryPointDeviation(ProcessModuleInfo module, NtHeaderInfo disk, NtHeaderInfo memory, List<PeAnomalyInfo> anomalies)
-        {
-            if (memory.AddressOfEntryPoint != disk.AddressOfEntryPoint)
-            {
-                anomalies.Add(new PeAnomalyInfo
-                {
-                    ModuleName = module.BaseDllName,
-                    AnomalyType = "Entry Point Redirection",
-                    Details = $"EP Memory: 0x{memory.AddressOfEntryPoint:X}, EP Disk: 0x{disk.AddressOfEntryPoint:X}. Code Injection Indicator.",
-                    Severity = "High"
-                });
-            }
-        }
-
-        private void CheckForRwxSections(ManagedProcess process, ProcessModuleInfo module, byte[] memoryBuffer, NtHeaderInfo headerInfo, List<PeAnomalyInfo> anomalies)
-        {
-            try
-            {
-                int sectionHeaderOffset = headerInfo.SectionHeaderOffset;
-                int numberOfSections = headerInfo.NumberOfSections;
-                int sectionSize = 40; // IMAGE_SECTION_HEADER size
-
-                for (int i = 0; i < numberOfSections; i++)
-                {
-                    int currentOffset = sectionHeaderOffset + (i * sectionSize);
-                    if (currentOffset + sectionSize > memoryBuffer.Length) break;
-
-                    // IMAGE_SECTION_HEADER:
-                    // 0x08: VirtualSize (uint)
-                    // 0x0C: VirtualAddress (uint)
-                    // 0x24: Characteristics (uint)
-
-                    uint virtualAddress = BitConverter.ToUInt32(memoryBuffer, currentOffset + 12);
-                    uint virtualSize = BitConverter.ToUInt32(memoryBuffer, currentOffset + 8);
-                    uint characteristics = BitConverter.ToUInt32(memoryBuffer, currentOffset + 36);
-
-                    // IMAGE_SCN_MEM_EXECUTE (0x20000000) | IMAGE_SCN_MEM_WRITE (0x80000000)
-                    bool isExecute = (characteristics & 0x20000000) != 0;
-                    bool isWrite = (characteristics & 0x80000000) != 0;
-
-                    if (isExecute && isWrite)
-                    {
-                        string name = System.Text.Encoding.ASCII.GetString(memoryBuffer, currentOffset, 8).TrimEnd('\0');
-
-                        // --- NEU: SHELLCODE HEURISTIK (Hasherezade-Style) ---
-                        // Wir lesen den Inhalt der Sektion, um False Positives zu vermeiden.
-                        // Wir lesen nur die ersten 4096 Bytes der Sektion, das reicht meist für Signaturen.
-
-                        try
-                        {
-                            long readSize = Math.Min(virtualSize, 4096);
-                            if (readSize > 0)
-                            {
-                                // Berechne absolute Adresse im Prozess: DllBase + VirtualAddress
-                                IntPtr sectionAddress = IntPtr.Add(module.DllBase, (int)virtualAddress);
-                                byte[] sectionContent = process.ReadMemory(sectionAddress, (int)readSize);
-
-                                // Nutze den neuen Detector
-                                if (ShellcodeDetector.IsLikelyShellcode(sectionContent, out string reason))
-                                {
-                                    anomalies.Add(new PeAnomalyInfo
-                                    {
-                                        ModuleName = module.BaseDllName,
-                                        AnomalyType = "Malicious RWX Section",
-                                        Details = $"Section '{name}' is RWX and contains suspicious data: {reason}",
-                                        Severity = "Critical"
-                                    });
-                                }
-                                else
-                                {
-                                    // Wenn es RWX ist, aber leer oder harmlos, loggen wir es als "Warning" statt Critical
-                                    // Das ist typisch für .NET JIT oder leere Padding-Sektionen
-                                    /* Optional: Wir könnten das hier ganz weglassen, um noch weniger Noise zu haben.
-                                       Aber RWX ist prinzipiell schlecht, daher behalte ich es als Low/Medium bei.
-                                    */
-                                   
-                                    anomalies.Add(new PeAnomalyInfo
-                                    {
-                                        ModuleName = module.BaseDllName,
-                                        AnomalyType = "RWX Section (Benign?)",
-                                        Details = $"Section '{name}' is RWX but appears empty or clean. (JIT?)",
-                                        Severity = "Low"
-                                    });
-                                    
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            // Lesen fehlgeschlagen, wir melden es sicherheitshalber trotzdem
-                            anomalies.Add(new PeAnomalyInfo
-                            {
-                                ModuleName = module.BaseDllName,
-                                AnomalyType = "RWX Section (Unreadable)",
-                                Details = $"Section '{name}' is RWX but could not be scanned.",
-                                Severity = "Medium"
-                            });
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.Log(LogLevel.Debug, "Error parsing sections for RWX check.", ex);
-            }
-        }
-        // Helper to parse essential NT Header fields
         private NtHeaderInfo ParseNtHeaders(byte[] buffer)
         {
             var info = new NtHeaderInfo { IsValid = false };
@@ -244,28 +180,17 @@ namespace NativeProcesses.Core.Inspection
                 if (e_lfanew > buffer.Length - 256) return info;
 
                 uint signature = BitConverter.ToUInt32(buffer, e_lfanew);
-                if (signature != 0x00004550) return info; // "PE\0\0"
+                if (signature != 0x00004550) return info;
 
-                // File Header starts at e_lfanew + 4
-                // NumberOfSections is at offset 2 inside File Header
                 info.NumberOfSections = BitConverter.ToUInt16(buffer, e_lfanew + 4 + 2);
-
-                // SizeOfOptionalHeader is at offset 16 inside File Header
                 ushort sizeOfOptionalHeader = BitConverter.ToUInt16(buffer, e_lfanew + 4 + 16);
-
-                // Optional Header starts at e_lfanew + 4 + 20 (FileHeader Size)
                 int optionalHeaderOffset = e_lfanew + 24;
 
-                // Magic is first 2 bytes of Optional Header
                 ushort magic = BitConverter.ToUInt16(buffer, optionalHeaderOffset);
                 bool is64Bit = (magic == 0x20B);
 
-                // AddressOfEntryPoint offset: 
-                // 32-bit: 16 bytes into OptionalHeader
-                // 64-bit: 16 bytes into OptionalHeader
+                info.SizeOfImage = BitConverter.ToUInt32(buffer, optionalHeaderOffset + 56);
                 info.AddressOfEntryPoint = BitConverter.ToUInt32(buffer, optionalHeaderOffset + 16);
-
-                // Calculate where Section Headers start
                 info.SectionHeaderOffset = optionalHeaderOffset + sizeOfOptionalHeader;
                 info.IsValid = true;
             }
@@ -281,6 +206,7 @@ namespace NativeProcesses.Core.Inspection
             public bool IsValid;
             public int NumberOfSections;
             public uint AddressOfEntryPoint;
+            public uint SizeOfImage;
             public int SectionHeaderOffset;
         }
     }

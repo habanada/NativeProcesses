@@ -201,7 +201,7 @@ namespace NativeProcesses.Core.Providers
                                        KernelTraceEventParser.Keywords.DiskIO |
                                        KernelTraceEventParser.Keywords.NetworkTCPIP |
                                        KernelTraceEventParser.Keywords.MemoryHardFaults |
-                                       KernelTraceEventParser.Keywords.VirtualAlloc |
+                                  //     KernelTraceEventParser.Keywords.VirtualAlloc | //todo this is not efficient => DISABLED
                                        KernelTraceEventParser.Keywords.Profile
                                        ;
 
@@ -229,7 +229,7 @@ namespace NativeProcesses.Core.Providers
                         _session.Source.Kernel.PerfInfoSample += OnPerfInfoSample;
 
                         _session.Source.Kernel.VirtualMemAlloc += OnVirtualAlloc;
-                        _session.Source.Kernel.VirtualMemFree += OnVirtualFree; // Verweist jetzt auf die korrigierte Methode
+                        _session.Source.Kernel.VirtualMemFree += OnVirtualFree; 
                         _flushTimer = new Timer(AggregateAndFlush, null, _intervalMs, _intervalMs);
 
                         _session.Source.Process();
@@ -405,7 +405,7 @@ namespace NativeProcesses.Core.Providers
         {
             if (HeapEventDetected == null)
                 return;
-
+            if (data.ProcessID == System.Diagnostics.Process.GetCurrentProcess().Id) return;
             try
             {
                 var info = new NativeHeapAllocationInfo

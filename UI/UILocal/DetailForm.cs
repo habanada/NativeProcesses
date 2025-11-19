@@ -18,6 +18,11 @@ namespace processlist
             this.Text = title;
             gridDetails.DataSource = data;
             _pid = pid;
+
+            // Initialisiere den Typ basierend auf den Daten
+            var firstItem = data.Cast<object>().FirstOrDefault();
+            if (firstItem != null) _itemType = firstItem.GetType();
+
             StyleForm(data);
         }
 
@@ -50,9 +55,75 @@ namespace processlist
             gridDetails.GridColor = Color.Gainsboro;
             gridDetails.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
 
-            gridDetails.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            // NEU: Event für Farbgebung registrieren
+            gridDetails.RowPrePaint += GridDetails_RowPrePaint;
 
             SetupContextMenu(data);
+        }
+        private void GridDetails_RowPrePaint(object sender, DataGridViewRowPrePaintEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+
+            var row = gridDetails.Rows[e.RowIndex];
+            var item = row.DataBoundItem;
+            if (item == null) return;
+
+            // Wir nutzen Reflection, um generisch auf Properties zuzugreifen, ohne den Typ hardcoden zu müssen
+            var type = item.GetType();
+
+            // 1. Check "Severity" (z.B. bei PeAnomalyInfo)
+            var severityProp = type.GetProperty("Severity");
+            if (severityProp != null)
+            {
+                string severity = severityProp.GetValue(item)?.ToString();
+                if (!string.IsNullOrEmpty(severity))
+                {
+                    switch (severity.ToLower())
+                    {
+                        case "critical":
+                            row.DefaultCellStyle.BackColor = Color.DarkRed;
+                            row.DefaultCellStyle.ForeColor = Color.White;
+                            row.DefaultCellStyle.SelectionBackColor = Color.Red;
+                            break;
+                        case "high":
+                            row.DefaultCellStyle.BackColor = Color.OrangeRed;
+                            row.DefaultCellStyle.ForeColor = Color.White;
+                            break;
+                        case "medium":
+                            row.DefaultCellStyle.BackColor = Color.Orange;
+                            row.DefaultCellStyle.ForeColor = Color.Black;
+                            break;
+                        case "low":
+                            row.DefaultCellStyle.BackColor = Color.LightYellow;
+                            row.DefaultCellStyle.ForeColor = Color.Black;
+                            break;
+                    }
+                }
+            }
+
+            // 2. Check "IsSafe" (z.B. bei Hooks)
+            var isSafeProp = type.GetProperty("IsSafe");
+            if (isSafeProp != null)
+            {
+                bool isSafe = (bool)isSafeProp.GetValue(item);
+                if (isSafe)
+                {
+                    // Sichere Hooks grün markieren
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(220, 255, 220); // Hellgrün
+                    row.DefaultCellStyle.ForeColor = Color.DarkGreen;
+                }
+            }
+
+            // 3. Check "DetectionMethod" (für Phantom Module)
+            var detectionProp = type.GetProperty("DetectionMethod");
+            if (detectionProp != null)
+            {
+                string method = detectionProp.GetValue(item)?.ToString();
+                if (method != null && (method.Contains("Unlinked") || method.Contains("Manually")))
+                {
+                    row.DefaultCellStyle.BackColor = Color.MistyRose;
+                }
+            }
         }
         private async void FindGcRoot_Click(object sender, EventArgs e)
         {
@@ -62,12 +133,10 @@ namespace processlist
             dynamic item = gridDetails.SelectedRows[0].DataBoundItem;
             ulong targetAddress = 0;
 
-            if (_itemType == typeof(NativeProcesses.Core.Models.DotNetExceptionInfo))
-                targetAddress = item.Address;
-            else if (_itemType == typeof(NativeProcesses.Core.Models.DotNetFinalizerInfo))
-                targetAddress = item.ObjectAddress;
-            else if (_itemType == typeof(NativeProcesses.Core.Models.DotNetLockInfo))
-                targetAddress = item.LockAddress;
+            // Reflection oder dynamic nutzen, um Abstürze bei Typ-Änderungen zu vermeiden
+            try { targetAddress = item.Address; } catch { }
+            if (targetAddress == 0) try { targetAddress = item.ObjectAddress; } catch { }
+            if (targetAddress == 0) try { targetAddress = item.LockAddress; } catch { }
 
             if (targetAddress == 0)
             {
@@ -95,30 +164,36 @@ namespace processlist
         }
         private void SetupContextMenu(IEnumerable data)
         {
+            // Context Menus bleiben weitgehend gleich, aber wir stellen sicher, dass _itemType korrekt ist
             if (_pid == -1 && _itemType == null)
             {
                 var first = data.Cast<object>().FirstOrDefault();
-                if (first == null)
-                    return;
+                if (first == null) return;
                 _itemType = first.GetType();
             }
 
-            if (_itemType == typeof(NativeProcesses.Core.Models.DotNetExceptionInfo) ||
-                _itemType == typeof(NativeProcesses.Core.Models.DotNetFinalizerInfo) ||
-                _itemType == typeof(NativeProcesses.Core.Models.DotNetLockInfo))
+            ContextMenuStrip menu = new ContextMenuStrip();
+            bool hasItems = false;
+
+            if (_itemType.Name.Contains("DotNetException") || _itemType.Name.Contains("DotNetFinalizer") || _itemType.Name.Contains("DotNetLock"))
             {
-                ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Items.Add("Find GC Root Path", null, FindGcRoot_Click);
-                gridDetails.ContextMenuStrip = menu;
+                hasItems = true;
             }
 
-            // --- NEU: Menü für Suspicious Memory Dumps ---
+            // --- NEU: Menü für Suspicious Memory Dumps & Phantoms ---
             if (_itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousMemoryRegionInfo) ||
-                _itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousThreadInfo)||
-                _itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo))
+                _itemType == typeof(NativeProcesses.Core.Inspection.SecurityInspector.SuspiciousThreadInfo) ||
+                _itemType == typeof(NativeProcesses.Core.Inspection.FoundPeHeaderInfo) ||
+                _itemType.Name == "PhantomModuleInfo" || // String Check, da die Klasse evtl. in einem anderen Namespace liegt
+                _itemType.Name == "PeAnomalyInfo")
             {
-                ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Items.Add("Dump this memory region...", null, DumpSuspiciousMemory_Click);
+                hasItems = true;
+            }
+
+            if (hasItems)
+            {
                 gridDetails.ContextMenuStrip = menu;
             }
         }

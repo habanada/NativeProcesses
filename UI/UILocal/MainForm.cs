@@ -49,6 +49,7 @@ namespace ProcessDemo
 
             SetupGrid();
             SetupThreadGrid();
+            InitializeScanFlagsComboBox();
 
             SetupMenu();
             LoadProcesses();
@@ -657,6 +658,7 @@ namespace ProcessDemo
                 {
                     this.Text = $"Processes: {_allProcessItems.Count}";
                 }
+                //ConfigureGridColumns();
             }
         }
 
@@ -686,6 +688,7 @@ namespace ProcessDemo
             grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
 
             grid.SelectionChanged += Grid_SelectionChanged;
+            grid.RowPrePaint += gridProcesses_RowPrePaint;
         }
 
         private void SetupThreadGrid()
@@ -714,7 +717,34 @@ namespace ProcessDemo
             gridThreads.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         }
 
+        // In MainForm.Designer.cs das Event verknüpfen oder im Konstruktor:
+        // this.gridProcesses.RowPrePaint += new System.Windows.Forms.DataGridViewRowPrePaintEventHandler(this.gridProcesses_RowPrePaint);
 
+        private void gridProcesses_RowPrePaint(object sender, DataGridViewRowPrePaintEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+
+            // Wir greifen auf das zugrundeliegende Datenobjekt zu
+            var row = grid.Rows[e.RowIndex];
+            var processVM = row.DataBoundItem as ProcessInfoViewModel;
+
+            if (processVM != null)
+            {
+                // Prüfe den ScanStatus String
+                if (processVM.ScanStatus.StartsWith("Infected"))
+                {
+                    // Rot für Infektionen
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(255, 230, 230); // Hellrot
+                    row.DefaultCellStyle.SelectionBackColor = Color.DarkRed;
+                }
+                else if (processVM.ScanStatus == "Clean")
+                {
+                    // Grün für sauber gescannte
+                    row.DefaultCellStyle.ForeColor = Color.DarkGreen;
+                }
+                // "Unscanned" bleibt Standard
+            }
+        }
         private async void Grid_SelectionChanged(object sender, EventArgs e)
         {
             var p = SelectedProcess;
@@ -789,35 +819,48 @@ namespace ProcessDemo
             _menuThread.Items.Add("Show Managed Stack", null, (s, e) => ShowManagedStackForSelectedThread());
             gridThreads.ContextMenuStrip = _menuThread;
         }
+        private void InitializeScanFlagsComboBox()
+        {
+            // ComboBox leeren (falls im Designer schon was drin war)
+            cmbScanFlags.DataSource = null;
+            cmbScanFlags.Items.Clear();
+
+            // Alle Werte aus dem Enum holen
+            // Wir nutzen Binding, damit das SelectedItem direkt den richtigen Typ hat
+            cmbScanFlags.DataSource = Enum.GetValues(typeof(NativeProcesses.Core.Native.ScanFlags));
+
+            // Standardauswahl setzen (z.B. 'All')
+            cmbScanFlags.SelectedItem = NativeProcesses.Core.Native.ScanFlags.All;
+        }
         private async void ScanSelectedProcessForHooks()
         {
             var p = SelectedProcess;
             if (p == null) return;
 
-            // HIER KANNST DU STEUERN, WAS GETESTET WIRD:
-            // Z.B. nur Anomalies und Memory:
-            // ScanFlags activeFlags = ScanFlags.Anomalies | ScanFlags.SuspiciousMemory;
 
-            // Oder alles (Standard):
             ScanFlags activeFlags = ScanFlags.All;
-
-            // Oder alles AUSSER IAT (falls das crasht):
-            // ScanFlags activeFlags = ScanFlags.All & ~ScanFlags.IatHooks;
+            if (cmbScanFlags.SelectedItem != null)
+            {
+                activeFlags = (NativeProcesses.Core.Native.ScanFlags)cmbScanFlags.SelectedItem;
+            }
+           
 
             this.Cursor = Cursors.WaitCursor;
             try
             {
                 // Wir übergeben die Flags hier
                 var result = await ProcessManager.ScanProcessForHooksAsync(p.FullInfo, activeFlags, _logger);
+                p.LastScanResult = result;
 
                 this.Cursor = Cursors.Default;
 
                 if (!result.IsHooked)
                 {
                     MessageBox.Show(this, $"Scan complete. No findings in PID {p.Pid} ({p.Name}).", "Scan Result", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    p.ScanStatus = "Clean";
                     return;
                 }
-
+                p.ScanStatus = $"Infected ({result.Anomalies.Count + result.InlineHooks.Count + result.IatHooks.Count + result.SuspiciousMemoryRegions.Count})";
                 // Anzeige-Logik (bleibt gleich, zeigt nur an was gefunden wurde)
                 if (result.Anomalies != null && result.Anomalies.Count > 0)
                 {
@@ -1199,11 +1242,11 @@ namespace ProcessDemo
 
             try
             {
-                string msg = $"[Heap] PID {info.ProcessId}: {info.EventName} at 0x{info.BaseAddress.ToString("X")} (Size: {info.Size} bytes)\n";
-                richTextBox1.SelectionColor = Color.Blue;
-                richTextBox1.AppendText(msg);
-                richTextBox1.ScrollToCaret();
-                richTextBox1.SelectionColor = Color.Black;
+                //string msg = $"[Heap] PID {info.ProcessId}: {info.EventName} at 0x{info.BaseAddress.ToString("X")} (Size: {info.Size} bytes)\n";
+                //richTextBox1.SelectionColor = Color.Blue;
+                //richTextBox1.AppendText(msg);
+                //richTextBox1.ScrollToCaret();
+                //richTextBox1.SelectionColor = Color.Black;
             }
             catch { }
             try
@@ -1292,7 +1335,7 @@ namespace ProcessDemo
                 lblFilter.Text = $"Filter: ({filteredList.Count})";
                 this.Text = $"Processes: {filteredList.Count}";
             }
-
+            ConfigureGridColumns();
             grid.ResumeLayout();
 
             if (grid.Rows.Count > 0)
@@ -1536,8 +1579,84 @@ namespace ProcessDemo
                 new NativeProcesses.Core.Inspection.SignatureModel { Name = "Metasploit FPU GetPC", PatternHex = "D9EED97424F4", IsStrongIndicator = true }
             };
             NativeProcesses.Core.Inspection.SignatureLoader.SaveSignaturesEncrypted("signatures.dat", initialSigs);
+            ConfigureGridColumns();
         }
+        private void ConfigureGridColumns()
+        {
+            // Sicherheitscheck
+            if (grid.Columns.Count == 0) return;
 
+            // 1. Erstmal ALLES verstecken (Clean Slate)
+            foreach (DataGridViewColumn col in grid.Columns)
+            {
+                col.Visible = false;
+            }
+
+            // 2. Definition der Spalten-Konfiguration
+            // Wir nutzen eine anonyme Klasse, um Formatierung, Ausrichtung und Breite an einem Ort zu haben.
+            var columnDefs = new[]
+            {
+                // --- Identifikation & Sicherheit ---
+                new { Prop = "Pid", Header = "PID", Width = 60, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+                new { Prop = "Name", Header = "Process Name", Width = 180, Format = "", Align = DataGridViewContentAlignment.MiddleLeft },
+                new { Prop = "ScanStatus", Header = "Malware Scan", Width = 120, Format = "", Align = DataGridViewContentAlignment.MiddleLeft },
+                new { Prop = "UserName", Header = "User", Width = 120, Format = "", Align = DataGridViewContentAlignment.MiddleLeft },
+                new { Prop = "IntegrityLevel", Header = "Integrity", Width = 80, Format = "", Align = DataGridViewContentAlignment.MiddleLeft },
+                new { Prop = "Architecture", Header = "Arch", Width = 50, Format = "", Align = DataGridViewContentAlignment.MiddleCenter },
+
+                // --- Performance (Echtzeit) ---
+                // CPU: Format "0.0" für eine Nachkommastelle
+                new { Prop = "CpuUsagePercent", Header = "CPU %", Width = 60, Format = "0.0", Align = DataGridViewContentAlignment.MiddleRight },        
+                // Speicher: "N0" für Tausendertrennzeichen
+                new { Prop = "WorkingSet", Header = "Working Set (KB)", Width = 90, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+                new { Prop = "PrivateBytes", Header = "Private (KB)", Width = 90, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+
+                // Disk I/O (Falls im ViewModel vorhanden)
+                new { Prop = "TotalReadBytes", Header = "I/O Read (Total)", Width = 100, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+                new { Prop = "TotalWriteBytes", Header = "I/O Write (Total)", Width = 100, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+                new { Prop = "TotalNetworkSend", Header = "Net Send", Width = 90, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+                new { Prop = "TotalNetworkRecv", Header = "Net Recv", Width = 90, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+
+                // --- Details ---
+                new { Prop = "ThreadCount", Header = "Threads", Width = 60, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+                new { Prop = "HandleCount", Header = "Handles", Width = 60, Format = "N0", Align = DataGridViewContentAlignment.MiddleRight },
+                new { Prop = "CompanyName", Header = "Company", Width = 150, Format = "", Align = DataGridViewContentAlignment.MiddleLeft },
+                new { Prop = "Description", Header = "Description", Width = 200, Format = "", Align = DataGridViewContentAlignment.MiddleLeft },
+                new { Prop = "CommandLine", Header = "Command Line", Width = 0, Format = "", Align = DataGridViewContentAlignment.MiddleLeft }, // Width 0 = AutoSize später oder versteckt lassen
+                new { Prop = "ImageType", Header = "Arch", Width = 60, Format = "", Align = DataGridViewContentAlignment.MiddleCenter }, // x86/x64
+            };
+
+            // 3. Anwenden
+            int displayIndex = 0;
+            foreach (var def in columnDefs)
+            {
+                // Prüfen, ob die Spalte im Grid existiert (d.h. ob sie im ViewModel ist)
+                if (grid.Columns.Contains(def.Prop))
+                {
+                    var col = grid.Columns[def.Prop];
+
+                    col.Visible = true;
+                    col.HeaderText = def.Header;
+                    col.DisplayIndex = displayIndex++; // Erzwingt die Reihenfolge wie oben definiert
+
+                    // Formatierung anwenden (Wichtig für Zahlen!)
+                    col.DefaultCellStyle.Format = def.Format;
+                    col.DefaultCellStyle.Alignment = def.Align;
+
+                    // Header Ausrichtung anpassen (Zahlen-Header auch rechtsbündig sieht oft besser aus)
+                    if (def.Align == DataGridViewContentAlignment.MiddleRight)
+                    {
+                        col.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight;
+                    }
+
+                    // Breite setzen
+                    if (def.Width > 0)
+                        col.Width = def.Width;
+                    else
+                        col.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill; // Rest auffüllen (z.B. Description)
+                }
+            }
+        }
         private void btnScanAll_Click(object sender, EventArgs e)
         {
             foreach (var proc in _allProcessItems)

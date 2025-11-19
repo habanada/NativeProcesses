@@ -37,14 +37,16 @@ namespace ProcessDemo
             this.panel4 = new System.Windows.Forms.Panel();
             this.lblFilter = new System.Windows.Forms.Label();
             this.panel3 = new System.Windows.Forms.Panel();
+            this.label1 = new System.Windows.Forms.Label();
+            this.cmbScanFlags = new System.Windows.Forms.ComboBox();
+            this.btnScanAll = new System.Windows.Forms.Button();
+            this.chkScanSuspicious = new System.Windows.Forms.CheckBox();
+            this.chkAutoScanNew = new System.Windows.Forms.CheckBox();
             this.edtFilter = new System.Windows.Forms.TextBox();
             this.panel2 = new System.Windows.Forms.Panel();
             this.splitContainer1 = new System.Windows.Forms.SplitContainer();
             this.grid = new System.Windows.Forms.DataGridView();
             this.gridThreads = new System.Windows.Forms.DataGridView();
-            this.chkAutoScanNew = new System.Windows.Forms.CheckBox();
-            this.chkScanSuspicious = new System.Windows.Forms.CheckBox();
-            this.btnScanAll = new System.Windows.Forms.Button();
             this.panel1.SuspendLayout();
             this.panel4.SuspendLayout();
             this.panel3.SuspendLayout();
@@ -62,7 +64,7 @@ namespace ProcessDemo
             this.richTextBox1.Dock = System.Windows.Forms.DockStyle.Bottom;
             this.richTextBox1.Location = new System.Drawing.Point(0, 354);
             this.richTextBox1.Name = "richTextBox1";
-            this.richTextBox1.Size = new System.Drawing.Size(800, 96);
+            this.richTextBox1.Size = new System.Drawing.Size(934, 96);
             this.richTextBox1.TabIndex = 1;
             this.richTextBox1.Text = "";
             // 
@@ -73,7 +75,7 @@ namespace ProcessDemo
             this.panel1.Dock = System.Windows.Forms.DockStyle.Top;
             this.panel1.Location = new System.Drawing.Point(0, 0);
             this.panel1.Name = "panel1";
-            this.panel1.Size = new System.Drawing.Size(800, 52);
+            this.panel1.Size = new System.Drawing.Size(934, 52);
             this.panel1.TabIndex = 2;
             // 
             // panel4
@@ -96,6 +98,8 @@ namespace ProcessDemo
             // 
             // panel3
             // 
+            this.panel3.Controls.Add(this.label1);
+            this.panel3.Controls.Add(this.cmbScanFlags);
             this.panel3.Controls.Add(this.btnScanAll);
             this.panel3.Controls.Add(this.chkScanSuspicious);
             this.panel3.Controls.Add(this.chkAutoScanNew);
@@ -103,14 +107,61 @@ namespace ProcessDemo
             this.panel3.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panel3.Location = new System.Drawing.Point(0, 0);
             this.panel3.Name = "panel3";
-            this.panel3.Size = new System.Drawing.Size(800, 52);
+            this.panel3.Size = new System.Drawing.Size(934, 52);
             this.panel3.TabIndex = 5;
+            // 
+            // label1
+            // 
+            this.label1.AutoSize = true;
+            this.label1.Location = new System.Drawing.Point(665, 33);
+            this.label1.Name = "label1";
+            this.label1.Size = new System.Drawing.Size(60, 13);
+            this.label1.TabIndex = 7;
+            this.label1.Text = "ScanFlags ";
+            // 
+            // cmbScanFlags
+            // 
+            this.cmbScanFlags.FormattingEnabled = true;
+            this.cmbScanFlags.Location = new System.Drawing.Point(731, 30);
+            this.cmbScanFlags.Name = "cmbScanFlags";
+            this.cmbScanFlags.Size = new System.Drawing.Size(121, 21);
+            this.cmbScanFlags.TabIndex = 6;
+            // 
+            // btnScanAll
+            // 
+            this.btnScanAll.Location = new System.Drawing.Point(511, 28);
+            this.btnScanAll.Name = "btnScanAll";
+            this.btnScanAll.Size = new System.Drawing.Size(148, 23);
+            this.btnScanAll.TabIndex = 5;
+            this.btnScanAll.Text = "Deep Scan All Processes";
+            this.btnScanAll.UseVisualStyleBackColor = true;
+            this.btnScanAll.Click += new System.EventHandler(this.btnScanAll_Click);
+            // 
+            // chkScanSuspicious
+            // 
+            this.chkScanSuspicious.AutoSize = true;
+            this.chkScanSuspicious.Location = new System.Drawing.Point(272, 29);
+            this.chkScanSuspicious.Name = "chkScanSuspicious";
+            this.chkScanSuspicious.Size = new System.Drawing.Size(227, 17);
+            this.chkScanSuspicious.TabIndex = 4;
+            this.chkScanSuspicious.Text = "Trigger Scan on Suspicious Activity (ETW)";
+            this.chkScanSuspicious.UseVisualStyleBackColor = true;
+            // 
+            // chkAutoScanNew
+            // 
+            this.chkAutoScanNew.AutoSize = true;
+            this.chkAutoScanNew.Location = new System.Drawing.Point(113, 29);
+            this.chkAutoScanNew.Name = "chkAutoScanNew";
+            this.chkAutoScanNew.Size = new System.Drawing.Size(153, 17);
+            this.chkAutoScanNew.TabIndex = 3;
+            this.chkAutoScanNew.Text = "Auto-Scan New Processes";
+            this.chkAutoScanNew.UseVisualStyleBackColor = true;
             // 
             // edtFilter
             // 
             this.edtFilter.Location = new System.Drawing.Point(113, 7);
             this.edtFilter.Name = "edtFilter";
-            this.edtFilter.Size = new System.Drawing.Size(684, 20);
+            this.edtFilter.Size = new System.Drawing.Size(818, 20);
             this.edtFilter.TabIndex = 2;
             // 
             // panel2
@@ -119,7 +170,7 @@ namespace ProcessDemo
             this.panel2.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panel2.Location = new System.Drawing.Point(0, 52);
             this.panel2.Name = "panel2";
-            this.panel2.Size = new System.Drawing.Size(800, 302);
+            this.panel2.Size = new System.Drawing.Size(934, 302);
             this.panel2.TabIndex = 3;
             // 
             // splitContainer1
@@ -135,8 +186,8 @@ namespace ProcessDemo
             // splitContainer1.Panel2
             // 
             this.splitContainer1.Panel2.Controls.Add(this.gridThreads);
-            this.splitContainer1.Size = new System.Drawing.Size(800, 302);
-            this.splitContainer1.SplitterDistance = 500;
+            this.splitContainer1.Size = new System.Drawing.Size(934, 302);
+            this.splitContainer1.SplitterDistance = 583;
             this.splitContainer1.TabIndex = 2;
             // 
             // grid
@@ -145,7 +196,7 @@ namespace ProcessDemo
             this.grid.Dock = System.Windows.Forms.DockStyle.Fill;
             this.grid.Location = new System.Drawing.Point(0, 0);
             this.grid.Name = "grid";
-            this.grid.Size = new System.Drawing.Size(500, 302);
+            this.grid.Size = new System.Drawing.Size(583, 302);
             this.grid.TabIndex = 2;
             // 
             // gridThreads
@@ -154,45 +205,15 @@ namespace ProcessDemo
             this.gridThreads.Dock = System.Windows.Forms.DockStyle.Fill;
             this.gridThreads.Location = new System.Drawing.Point(0, 0);
             this.gridThreads.Name = "gridThreads";
-            this.gridThreads.Size = new System.Drawing.Size(296, 302);
+            this.gridThreads.Size = new System.Drawing.Size(347, 302);
             this.gridThreads.TabIndex = 3;
-            // 
-            // chkAutoScanNew
-            // 
-            this.chkAutoScanNew.AutoSize = true;
-            this.chkAutoScanNew.Location = new System.Drawing.Point(113, 29);
-            this.chkAutoScanNew.Name = "chkAutoScanNew";
-            this.chkAutoScanNew.Size = new System.Drawing.Size(153, 17);
-            this.chkAutoScanNew.TabIndex = 3;
-            this.chkAutoScanNew.Text = "Auto-Scan New Processes";
-            this.chkAutoScanNew.UseVisualStyleBackColor = true;
-            // 
-            // chkScanSuspicious
-            // 
-            this.chkScanSuspicious.AutoSize = true;
-            this.chkScanSuspicious.Location = new System.Drawing.Point(272, 29);
-            this.chkScanSuspicious.Name = "chkScanSuspicious";
-            this.chkScanSuspicious.Size = new System.Drawing.Size(227, 17);
-            this.chkScanSuspicious.TabIndex = 4;
-            this.chkScanSuspicious.Text = "Trigger Scan on Suspicious Activity (ETW)";
-            this.chkScanSuspicious.UseVisualStyleBackColor = true;
-            // 
-            // btnScanAll
-            // 
-            this.btnScanAll.Location = new System.Drawing.Point(511, 28);
-            this.btnScanAll.Name = "btnScanAll";
-            this.btnScanAll.Size = new System.Drawing.Size(148, 23);
-            this.btnScanAll.TabIndex = 5;
-            this.btnScanAll.Text = "Deep Scan All Processes";
-            this.btnScanAll.UseVisualStyleBackColor = true;
-            this.btnScanAll.Click += new System.EventHandler(this.btnScanAll_Click);
             // 
             // MainForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.Color.DimGray;
-            this.ClientSize = new System.Drawing.Size(800, 450);
+            this.ClientSize = new System.Drawing.Size(934, 450);
             this.Controls.Add(this.panel2);
             this.Controls.Add(this.panel1);
             this.Controls.Add(this.richTextBox1);
@@ -232,6 +253,8 @@ namespace ProcessDemo
         private System.Windows.Forms.Button btnScanAll;
         private System.Windows.Forms.CheckBox chkScanSuspicious;
         private System.Windows.Forms.CheckBox chkAutoScanNew;
+        private System.Windows.Forms.Label label1;
+        private System.Windows.Forms.ComboBox cmbScanFlags;
     }
 }
 
