@@ -18,7 +18,7 @@ namespace NativeProcesses.Core.Inspection
     {
         private IEngineLogger _logger;
         private static readonly Dictionary<string, bool> _signatureCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, Dictionary<string, IntPtr>> _globalExportCache = new Dictionary<string, Dictionary<string, IntPtr>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Dictionary<string, IntPtr>> _globalExportCache
         // Lock-Objekte für Thread-Safety
         private static readonly object _sigLock = new object();
         private static readonly object _exportLock = new object();
