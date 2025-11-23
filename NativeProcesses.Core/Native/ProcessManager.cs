@@ -292,22 +292,31 @@ namespace NativeProcesses.Core.Native
                                 catch (Exception ex) { errors.Add($"Failed to build ntdll export map: {ex.Message}"); }
                             }
 
-                            // 4. VAD Scan (Phantom Module / Unbacked Code)
+                            // 4. VAD Scan (Phantom Module / Unbacked Code / JIT)
                             if (flags.HasFlag(ScanFlags.Anomalies) || flags.HasFlag(ScanFlags.SuspiciousMemory))
                             {
                                 try
                                 {
                                     var vadScanner = new VadScanner(logger);
-                                    var phantoms = vadScanner.ScanForPhantoms(procToScan, modules, regions);
+
+                                    // FIX: Wir übergeben jetzt processInfo.Name (oder holen ihn neu), damit die JIT-Heuristik funktioniert.
+                                    // Da processInfo.Name evtl. veraltet ist, nutzen wir procToScan.GetExePath() oder einfach den Namen aus der Info-Klasse.
+                                    string procName = processInfo.Name;
+
+                                    var phantoms = vadScanner.ScanForPhantoms(procToScan, modules, procName);
 
                                     foreach (var phantom in phantoms)
                                     {
+                                        // Nur Anomalien mit hoher/kritischer Severity melden, wenn wir im Malware-Modus sind.
+                                        // Für Forensic-Mode (den du vielleicht später willst) könnte man alles nehmen.
+                                        // Hier nehmen wir alles, aber die UI färbt es dann basierend auf Severity.
+
                                         anomalies.Add(new PeAnomalyInfo
                                         {
                                             ModuleName = string.IsNullOrEmpty(phantom.NtPath) ? $"Unbacked_0x{phantom.BaseAddress.ToString("X")}" : phantom.NtPath,
-                                            AnomalyType = phantom.DetectionMethod,
+                                            AnomalyType = phantom.DetectionMethod, // "Floating PE", "Shellcode", "JIT"
                                             Details = phantom.Details ?? $"Found executable region at 0x{phantom.BaseAddress.ToString("X")} not in PEB.",
-                                            Severity = "Critical"
+                                            Severity = phantom.Severity // Critical, High, Medium...
                                         });
                                     }
                                 }
@@ -346,7 +355,7 @@ namespace NativeProcesses.Core.Native
                                                 });
                                             }
 
-                                            var modsAnomalies = anomalyScanner.ScanModule(procToScan, mod);
+                                            var modsAnomalies = anomalyScanner.ScanModule(procToScan, mod,regions);
                                             foreach (var a in modsAnomalies) anomalies.Add(a);
 
                                             var permissionAnomalies = inspector.CheckSectionPermissionMismatch(procToScan, mod, regions);
@@ -374,18 +383,24 @@ namespace NativeProcesses.Core.Native
                                         catch (Exception ex) { errors.Add($"Inline hook error {mod.BaseDllName}: {ex.Message}"); }
                                     }
 
-                                    // 5c. IAT Hooks
-                                    if (flags.HasFlag(ScanFlags.IatHooks) && ntdllModule != null && ntdllExports.Count > 0)
+                                    // 5c. IAT Hooks (NEU - Nutzt den Forensic IatScanner)
+                                    if (flags.HasFlag(ScanFlags.IatHooks))
                                     {
                                         try
                                         {
-                                            var hooks = inspector.CheckIatHooks(procToScan, mod.DllBase, mod.BaseDllName, ntdllExports, modules, regions);
+                                            // Instanziiere den neuen Scanner (kann auch außerhalb der Loop gecached werden)
+                                            var iatScanner = new NativeProcesses.Core.Inspection.IatScanner(logger);
+
+                                            // ScanModule führt jetzt Verification + Discovery (Hidden IATs) durch
+                                            var hooks = iatScanner.ScanModule(procToScan, mod, modules, regions);
+
                                             foreach (var hook in hooks)
                                             {
-                                                // Whitelist-Check
+                                                // Whitelist-Check ist jetzt im IatScanner integriert (via TrustLevel),
+                                                // aber wir filtern hier für den Report nochmal, falls IsSafe true ist.
                                                 if (hook.IsSafe) continue;
 
-                                                hook.TargetModule = inspector.ResolveTargetAddress(hook.ActualAddress, procToScan, modules, regions);
+                                                // Target Module ist bereits im IatScanner aufgelöst worden
                                                 iatHooks.Add(hook);
                                             }
                                         }
@@ -470,34 +485,34 @@ namespace NativeProcesses.Core.Native
             return result;
         }
 
-        public static Task<List<PeAnomalyInfo>> ScanProcessForAnomaliesAsync(int pid, IEngineLogger logger = null)
-        {
-            return Task.Run(async () =>
-            {
-                var results = new List<PeAnomalyInfo>();
-                var scanner = new PeAnomalyScanner(logger);
-                var access = ProcessAccessFlags.QueryInformation | ProcessAccessFlags.VmRead;
+        //public static Task<List<PeAnomalyInfo>> ScanProcessForAnomaliesAsync(int pid, IEngineLogger logger = null)
+        //{
+        //    return Task.Run(async () =>
+        //    {
+        //        var results = new List<PeAnomalyInfo>();
+        //        var scanner = new PeAnomalyScanner(logger);
+        //        var access = ProcessAccessFlags.QueryInformation | ProcessAccessFlags.VmRead;
 
-                try
-                {
-                    var modules = await GetModulesAsync(pid, logger);
-                    using (var proc = new ManagedProcess(pid, access))
-                    {
-                        foreach (var mod in modules)
-                        {
-                            if (string.IsNullOrEmpty(mod.FullDllName) || mod.FullDllName.StartsWith("[")) continue;
-                            var modAnomalies = scanner.ScanModule(proc, mod);
-                            results.AddRange(modAnomalies);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    logger?.Log(LogLevel.Error, $"ScanProcessForAnomaliesAsync failed for PID {pid}.", ex);
-                }
-                return results;
-            });
-        }
+        //        try
+        //        {
+        //            var modules = await GetModulesAsync(pid, logger);
+        //            using (var proc = new ManagedProcess(pid, access))
+        //            {
+        //                foreach (var mod in modules)
+        //                {
+        //                    if (string.IsNullOrEmpty(mod.FullDllName) || mod.FullDllName.StartsWith("[")) continue;
+        //                    var modAnomalies = scanner.ScanModule(proc, mod);
+        //                    results.AddRange(modAnomalies);
+        //                }
+        //            }
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            logger?.Log(LogLevel.Error, $"ScanProcessForAnomaliesAsync failed for PID {pid}.", ex);
+        //        }
+        //        return results;
+        //    });
+        //}
 
         // --- Management Helper Methods ---
 

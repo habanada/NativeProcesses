@@ -14,7 +14,7 @@ namespace NativeProcesses.Core.Inspection
             byte[] rawFile = File.ReadAllBytes(filePath);
 
             // 1. Header Parsen (DOS & NT)
-            var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(rawFile, 0);
+            var dosHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_DOS_HEADER>(rawFile, 0);
             if (!dosHeader.IsValid) throw new Exception("Invalid DOS Header");
 
             int ntOffset = dosHeader.e_lfanew;
@@ -22,12 +22,12 @@ namespace NativeProcesses.Core.Inspection
 
             // File Header
             int fileHeaderOffset = ntOffset + 4;
-            var fileHeader = ByteArrayToStructure<PeStructs.IMAGE_FILE_HEADER>(rawFile, fileHeaderOffset);
+            var fileHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_FILE_HEADER>(rawFile, fileHeaderOffset);
 
             // Optional Header
-            int optHeaderOffset = fileHeaderOffset + Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER));
+            int optHeaderOffset = fileHeaderOffset + Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_FILE_HEADER));
             ushort magic = BitConverter.ToUInt16(rawFile, optHeaderOffset);
-            bool is64 = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+            bool is64 = (magic == PE.PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
 
             uint sizeOfImage = 0;
             uint sizeOfHeaders = 0;
@@ -38,26 +38,26 @@ namespace NativeProcesses.Core.Inspection
             // Lese wichtige Werte aus Optional Header
             if (is64)
             {
-                var opt64 = ByteArrayToStructure<PeStructs.IMAGE_OPTIONAL_HEADER64>(rawFile, optHeaderOffset);
+                var opt64 = ByteArrayToStructure<PE.PeHeaders.IMAGE_OPTIONAL_HEADER64>(rawFile, optHeaderOffset);
                 sizeOfImage = opt64.SizeOfImage;
                 sizeOfHeaders = opt64.SizeOfHeaders;
                 originalImageBase = opt64.ImageBase;
-                if (opt64.NumberOfRvaAndSizes > PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC)
+                if (opt64.NumberOfRvaAndSizes > PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_BASERELOC)
                 {
-                    relocDirRva = opt64.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
-                    relocDirSize = opt64.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+                    relocDirRva = opt64.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
+                    relocDirSize = opt64.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
                 }
             }
             else
             {
-                var opt32 = ByteArrayToStructure<PeStructs.IMAGE_OPTIONAL_HEADER32>(rawFile, optHeaderOffset);
+                var opt32 = ByteArrayToStructure<PE.PeHeaders.IMAGE_OPTIONAL_HEADER32>(rawFile, optHeaderOffset);
                 sizeOfImage = opt32.SizeOfImage;
                 sizeOfHeaders = opt32.SizeOfHeaders;
                 originalImageBase = opt32.ImageBase;
-                if (opt32.NumberOfRvaAndSizes > PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC)
+                if (opt32.NumberOfRvaAndSizes > PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_BASERELOC)
                 {
-                    relocDirRva = opt32.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
-                    relocDirSize = opt32.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+                    relocDirRva = opt32.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
+                    relocDirSize = opt32.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
                 }
             }
 
@@ -70,12 +70,12 @@ namespace NativeProcesses.Core.Inspection
 
             // Section Headers parsen und Sektionen kopieren
             int sectionHeadersOffset = optHeaderOffset + fileHeader.SizeOfOptionalHeader;
-            int sectionSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_SECTION_HEADER));
+            int sectionSize = Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_SECTION_HEADER));
 
             for (int i = 0; i < fileHeader.NumberOfSections; i++)
             {
                 int entryOffset = sectionHeadersOffset + (i * sectionSize);
-                var section = ByteArrayToStructure<PeStructs.IMAGE_SECTION_HEADER>(rawFile, entryOffset);
+                var section = ByteArrayToStructure<PE.PeHeaders.IMAGE_SECTION_HEADER>(rawFile, entryOffset);
 
                 if (section.SizeOfRawData > 0 && section.PointerToRawData > 0)
                 {
@@ -132,19 +132,19 @@ namespace NativeProcesses.Core.Inspection
 
                     switch (type)
                     {
-                        case PeStructs.IMAGE_REL_BASED_HIGHLOW: // 32-Bit Patch
+                        case PE.PeHeaders.IMAGE_REL_BASED_HIGHLOW: // 32-Bit Patch
                             uint original32 = BitConverter.ToUInt32(image, targetRva);
                             uint patched32 = (uint)(original32 + delta);
                             BitConverter.GetBytes(patched32).CopyTo(image, targetRva);
                             break;
 
-                        case PeStructs.IMAGE_REL_BASED_DIR64: // 64-Bit Patch
+                        case PE.PeHeaders.IMAGE_REL_BASED_DIR64: // 64-Bit Patch
                             ulong original64 = BitConverter.ToUInt64(image, targetRva);
                             ulong patched64 = (ulong)((long)original64 + delta);
                             BitConverter.GetBytes(patched64).CopyTo(image, targetRva);
                             break;
 
-                        case PeStructs.IMAGE_REL_BASED_ABSOLUTE:
+                        case PE.PeHeaders.IMAGE_REL_BASED_ABSOLUTE:
                             // Padding, nix tun
                             break;
                     }

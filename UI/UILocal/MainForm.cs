@@ -3,20 +3,22 @@
    Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
 */
 using NativeProcesses.Core;
-using NativeProcesses.Core.Engine;
-using NativeProcesses.Core.Native;
 using NativeProcesses.Core;
+using NativeProcesses.Core.Engine;
+using NativeProcesses.Core.Inspection;
+using NativeProcesses.Core.Models;
+using NativeProcesses.Core.Native;
+using NativeProcesses.Core.PE.Loader;
 using NativeProcesses.Core.Providers;
 using processlist;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
+using System.IO;
 using System.Linq;
-using System.Windows.Forms;
-using NativeProcesses.Core.Models;
 using System.Threading.Tasks;
-using NativeProcesses.Core.Inspection;
+using System.Windows.Forms;
 
 namespace ProcessDemo
 {
@@ -814,10 +816,76 @@ namespace ProcessDemo
             _menu.Items.Add("Scan for Hooks (IAT, Inline, Memory)...", null, (s, e) => ScanSelectedProcessForHooks());
             _menu.Items.Add("Scan System for Hidden Processes...", null, (s, e) => ScanForHiddenProcesses());
 
+            // NEU: Der Debug-Eintrag
+            _menu.Items.Add("-");
+            _menu.Items.Add("Test Function (Debug IAT)", null, (s, e) => RunTestFunction());
+
             _menuThread.Items.Add("Show Priorities (F7)", null, (s, e) => ShowPrioritiesForSelectedThread());
             _menuThread.Items.Add("Resolve Start Address (F8)", null, (s, e) => ResolveSelectedThreadAddress());
             _menuThread.Items.Add("Show Managed Stack", null, (s, e) => ShowManagedStackForSelectedThread());
             gridThreads.ContextMenuStrip = _menuThread;
+        }
+        private async void RunTestFunction()
+        {
+            var p = SelectedProcess;
+            if (p == null) return;
+
+            this.Cursor = Cursors.WaitCursor;
+            try
+            {
+                _logger?.Log(LogLevel.Info, $"[DEBUG] Starting IAT Test Scan for PID {p.Pid}...");
+
+                // 1. Aktuelle Daten holen (Module & Memory Map)
+                var modules = await ProcessManager.GetModulesAsync(p.Pid, _logger);
+                var regions = await ProcessManager.GetVirtualMemoryRegionsAsync(p.Pid, _logger);
+
+                // 2. Scanner initialisieren
+                var scanner = new NativeProcesses.Core.Inspection.IatScanner(_logger);
+                var allHooks = new List<NativeProcesses.Core.Inspection.SecurityInspector.IatHookInfo>();
+
+                // 3. Zugriff auf Prozess holen
+                var access = NativeProcesses.Core.Native.ProcessAccessFlags.QueryInformation | NativeProcesses.Core.Native.ProcessAccessFlags.VmRead;
+                using (var proc = new NativeProcesses.Core.Native.ManagedProcess(p.Pid, access))
+                {
+                    // 4. Alle Module scannen
+                    foreach (var mod in modules)
+                    {
+                        // System-Pseudo-Module überspringen
+                        if (string.IsNullOrEmpty(mod.FullDllName) || mod.FullDllName.StartsWith("[")) continue;
+
+                        // Optional: Filter für Debugging (z.B. nur kernel32 scannen)
+                        // if (!mod.BaseDllName.Equals("kernel32.dll", StringComparison.OrdinalIgnoreCase)) continue;
+
+                        var hooks = scanner.ScanModule(proc, mod, modules, regions);
+                        if (hooks.Count > 0)
+                        {
+                            _logger?.Log(LogLevel.Info, $"[DEBUG] Found {hooks.Count} hooks in {mod.BaseDllName}");
+                            allHooks.AddRange(hooks);
+                        }
+                    }
+                }
+
+                this.Cursor = Cursors.Default;
+
+                // 5. Ergebnis anzeigen
+                if (allHooks.Count > 0)
+                {
+                    using (var f = new DetailForm($"DEBUG: IAT Scan Results ({allHooks.Count})", allHooks, p.Pid))
+                    {
+                        f.ShowDialog(this);
+                    }
+                }
+                else
+                {
+                    MessageBox.Show($"Test Function: IAT Scan Clean for PID {p.Pid}!\n(Checked {modules.Count} modules)", "Debug Result", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                this.Cursor = Cursors.Default;
+                MessageBox.Show($"Test Function Failed: {ex.Message}\n\n{ex.StackTrace}");
+                _logger?.Log(LogLevel.Error, "Test Function Error", ex);
+            }
         }
         private void InitializeScanFlagsComboBox()
         {
@@ -1668,6 +1736,33 @@ namespace ProcessDemo
                 }
             }
             MessageBox.Show($"Queued {_allProcessItems.Count} processes for deep scan.", "Mass Scan Started");
+        }
+
+        private void button1_Click(object sender, EventArgs e)
+        {
+            PayloadRunner.RunRemoteInjectionDemo();
+            //string targetPath = @"C:\Windows\System32\calc.exe";
+            //byte[] payloadBytes = File.ReadAllBytes(targetPath);
+            //using (var loader = new PeExecutor())
+            //{
+            //    // A. Load (Map, Reloc, Import, TLS, Cookie)
+            //    if (loader.Load(payloadBytes))
+            //    {
+            //        // B. Run (EntryPoint)
+            //        try
+            //        {
+            //            loader.Run();
+            //        }
+            //        catch (Exception runEx)
+            //        {
+            //            MessageBox.Show("Payload crashed during execution: " + runEx.Message);
+            //        }
+            //    }
+            //    else
+            //    {
+            //        MessageBox.Show("Loader init failed.");
+            //    }
+            //}
         }
     }
 

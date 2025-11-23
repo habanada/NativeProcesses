@@ -1,8 +1,4 @@
-﻿/*
-   NativeProcesses Framework  |  © 2025 Selahattin Erkoc
-   Licensed under GNU GPL v3  |  https://www.gnu.org/licenses/
-*/
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -147,7 +143,12 @@ namespace NativeProcesses.Core.Inspection
                     return true;
                 }
             }
-
+            // [NEU] 7. Heuristik: XOR-Loop Detection (Obfuscation Scanner)
+            if (IsXorLoop(buffer, out string xorReason))
+            {
+                detectionReason = xorReason;
+                return true;
+            }
             // Wenn wir einen schwachen Pattern-Treffer hatten, aber die Stats dagegen sprechen, geben wir es trotzdem als Warnung aus
             if (detectionReason != "Clean") return true;
 
@@ -218,7 +219,65 @@ namespace NativeProcesses.Core.Inspection
             // Wir brauchen mindestens 3 Indikatoren für "Likely Code"
             return points >= 3;
         }
+        private static bool IsXorLoop(byte[] buffer, out string reason)
+        {
+            reason = null;
+            if (buffer.Length < 32) return false;
 
+            // Typische XOR-Decodier-Schleifen (x86/x64)
+            // Loop: XOR [REG], REG; INC REG; LOOP ...
+            // Wir suchen nach dichten XOR-Instruktionen in Kombination mit Loops.
+
+            int xorCount = 0;
+            int loopCount = 0;
+            int flowCount = 0;
+
+            // Wir scannen nur die ersten 128 Bytes (Decryption Stub ist meist am Anfang)
+            int scanLimit = Math.Min(buffer.Length, 128);
+
+            for (int i = 0; i < scanLimit; i++)
+            {
+                byte b = buffer[i];
+
+                // XOR opcodes: 30-35 (XOR r/m, r), 80-83 (XOR immediate)
+                if ((b >= 0x30 && b <= 0x35) || (b >= 0x80 && b <= 0x83))
+                {
+                    // Prüfe auf ModRM byte für XOR (Reg, [Mem])
+                    if (i + 1 < scanLimit)
+                    {
+                        byte modrm = buffer[i + 1];
+                        // Heuristik: XOR [Reg], ...
+                        if ((modrm & 0xC0) != 0xC0) xorCount++;
+                    }
+                }
+
+                // LOOP / JNZ short (oft für Schleifen genutzt)
+                if (b == 0xE2 || (b == 0x75 && i + 1 < scanLimit && buffer[i + 1] >= 0xF0)) // LOOP oder JNZ rückwärts
+                {
+                    loopCount++;
+                }
+
+                // FLD/FSTENV (GetPC)
+                if (b == 0xD9 && i + 1 < scanLimit && (buffer[i + 1] == 0xEE || buffer[i + 1] == 0xD0))
+                {
+                    flowCount++;
+                }
+            }
+
+            if (xorCount >= 2 && loopCount >= 1)
+            {
+                reason = "Heuristic: XOR Decoding Loop Detected";
+                return true;
+            }
+
+            if (flowCount >= 1 && xorCount >= 1)
+            {
+                reason = "Heuristic: GetPC + XOR Detected";
+                return true;
+            }
+
+            return false;
+        }
         private static double GetByteRatio(BufferStats stats, byte b)
         {
             if (stats.Histogram.TryGetValue(b, out int count))

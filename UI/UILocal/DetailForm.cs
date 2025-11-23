@@ -68,10 +68,58 @@ namespace processlist
             var item = row.DataBoundItem;
             if (item == null) return;
 
-            // Wir nutzen Reflection, um generisch auf Properties zuzugreifen, ohne den Typ hardcoden zu müssen
+            // Standard-Werte zurücksetzen (wichtig beim Scrollen/Recycling)
+            row.DefaultCellStyle.BackColor = (e.RowIndex % 2 == 0) ? Color.White : Color.FromArgb(240, 240, 240);
+            row.DefaultCellStyle.ForeColor = Color.Black;
+            row.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 120, 215);
+            row.DefaultCellStyle.SelectionForeColor = Color.White;
+
             var type = item.GetType();
 
-            // 1. Check "Severity" (z.B. bei PeAnomalyInfo)
+            // -------------------------------------------------------
+            // 1. PRIORITY: TrustLevel (IAT Hooks / Forensic Mode)
+            // -------------------------------------------------------
+            var trustProp = type.GetProperty("TrustLevel");
+            if (trustProp != null)
+            {
+                var trustValue = trustProp.GetValue(item);
+
+                // Wir nutzen hier den Namen des Enums oder int-Cast, um sicherzugehen
+                // NativeProcesses.Core.Inspection.HookTrustLevel
+                string trustName = trustValue.ToString();
+
+                switch (trustName)
+                {
+                    case "Malicious":
+                        row.DefaultCellStyle.BackColor = Color.Red;
+                        row.DefaultCellStyle.ForeColor = Color.White;
+                        row.DefaultCellStyle.SelectionBackColor = Color.DarkRed;
+                        return; // Fertig
+
+                    case "Suspicious":
+                        row.DefaultCellStyle.BackColor = Color.Orange;
+                        row.DefaultCellStyle.ForeColor = Color.Black;
+                        return;
+
+                    case "ThirdParty": // Signiert (AV, Treiber, etc.)
+                        row.DefaultCellStyle.BackColor = Color.AliceBlue;
+                        row.DefaultCellStyle.ForeColor = Color.DarkSlateBlue;
+                        return;
+
+                    case "Microsoft": // Visual Studio, Office etc.
+                        row.DefaultCellStyle.BackColor = Color.Honeydew; // Sehr helles Grün
+                        row.DefaultCellStyle.ForeColor = Color.DarkGreen;
+                        return;
+
+                    case "System": // System32/Kernelbase Redirects
+                        row.DefaultCellStyle.ForeColor = Color.Gray; // Ausgegraut (Rauschen)
+                        return;
+                }
+            }
+
+            // -------------------------------------------------------
+            // 2. CHECK: Severity (PeAnomalyScanner)
+            // -------------------------------------------------------
             var severityProp = type.GetProperty("Severity");
             if (severityProp != null)
             {
@@ -98,33 +146,108 @@ namespace processlist
                             row.DefaultCellStyle.ForeColor = Color.Black;
                             break;
                     }
+                    // Wenn Severity gesetzt war, brechen wir hier ab, damit IsSafe es nicht überschreibt
+                    return;
                 }
             }
 
-            // 2. Check "IsSafe" (z.B. bei Hooks)
+            // -------------------------------------------------------
+            // 3. CHECK: DetectionMethod (Phantom Modules / VAD)
+            // -------------------------------------------------------
+            var detectionProp = type.GetProperty("DetectionMethod");
+            if (detectionProp != null)
+            {
+                string method = detectionProp.GetValue(item)?.ToString();
+                if (!string.IsNullOrEmpty(method))
+                {
+                    if (method.Contains("Unlinked") || method.Contains("Manually"))
+                    {
+                        row.DefaultCellStyle.BackColor = Color.MistyRose;
+                        row.DefaultCellStyle.ForeColor = Color.DarkRed;
+                    }
+                    return;
+                }
+            }
+
+            // -------------------------------------------------------
+            // 4. FALLBACK: IsSafe (Legacy / Simple Hooks)
+            // -------------------------------------------------------
             var isSafeProp = type.GetProperty("IsSafe");
             if (isSafeProp != null)
             {
                 bool isSafe = (bool)isSafeProp.GetValue(item);
                 if (isSafe)
                 {
-                    // Sichere Hooks grün markieren
-                    row.DefaultCellStyle.BackColor = Color.FromArgb(220, 255, 220); // Hellgrün
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(230, 255, 230); // Hellgrün
                     row.DefaultCellStyle.ForeColor = Color.DarkGreen;
                 }
             }
-
-            // 3. Check "DetectionMethod" (für Phantom Module)
-            var detectionProp = type.GetProperty("DetectionMethod");
-            if (detectionProp != null)
-            {
-                string method = detectionProp.GetValue(item)?.ToString();
-                if (method != null && (method.Contains("Unlinked") || method.Contains("Manually")))
-                {
-                    row.DefaultCellStyle.BackColor = Color.MistyRose;
-                }
-            }
         }
+        //private void GridDetails_RowPrePaint(object sender, DataGridViewRowPrePaintEventArgs e)
+        //{
+        //    if (e.RowIndex < 0) return;
+
+        //    var row = gridDetails.Rows[e.RowIndex];
+        //    var item = row.DataBoundItem;
+        //    if (item == null) return;
+
+        //    // Wir nutzen Reflection, um generisch auf Properties zuzugreifen, ohne den Typ hardcoden zu müssen
+        //    var type = item.GetType();
+
+        //    // 1. Check "Severity" (z.B. bei PeAnomalyInfo)
+        //    var severityProp = type.GetProperty("Severity");
+        //    if (severityProp != null)
+        //    {
+        //        string severity = severityProp.GetValue(item)?.ToString();
+        //        if (!string.IsNullOrEmpty(severity))
+        //        {
+        //            switch (severity.ToLower())
+        //            {
+        //                case "critical":
+        //                    row.DefaultCellStyle.BackColor = Color.DarkRed;
+        //                    row.DefaultCellStyle.ForeColor = Color.White;
+        //                    row.DefaultCellStyle.SelectionBackColor = Color.Red;
+        //                    break;
+        //                case "high":
+        //                    row.DefaultCellStyle.BackColor = Color.OrangeRed;
+        //                    row.DefaultCellStyle.ForeColor = Color.White;
+        //                    break;
+        //                case "medium":
+        //                    row.DefaultCellStyle.BackColor = Color.Orange;
+        //                    row.DefaultCellStyle.ForeColor = Color.Black;
+        //                    break;
+        //                case "low":
+        //                    row.DefaultCellStyle.BackColor = Color.LightYellow;
+        //                    row.DefaultCellStyle.ForeColor = Color.Black;
+        //                    break;
+        //            }
+        //        }
+        //    }
+
+        //    // 2. Check "IsSafe" (z.B. bei Hooks)
+        //    var isSafeProp = type.GetProperty("IsSafe");
+        //    if (isSafeProp != null)
+        //    {
+        //        bool isSafe = (bool)isSafeProp.GetValue(item);
+        //        if (isSafe)
+        //        {
+        //            // Sichere Hooks grün markieren
+        //            row.DefaultCellStyle.BackColor = Color.FromArgb(220, 255, 220); // Hellgrün
+        //            row.DefaultCellStyle.ForeColor = Color.DarkGreen;
+        //        }
+        //    }
+
+        //    // 3. Check "DetectionMethod" (für Phantom Module)
+        //    var detectionProp = type.GetProperty("DetectionMethod");
+        //    if (detectionProp != null)
+        //    {
+        //        string method = detectionProp.GetValue(item)?.ToString();
+        //        if (method != null && (method.Contains("Unlinked") || method.Contains("Manually")))
+        //        {
+        //            row.DefaultCellStyle.BackColor = Color.MistyRose;
+        //        }
+        //    }
+        //}
         private async void FindGcRoot_Click(object sender, EventArgs e)
         {
             if (gridDetails.SelectedRows.Count == 0 || _pid == -1 || _itemType == null)

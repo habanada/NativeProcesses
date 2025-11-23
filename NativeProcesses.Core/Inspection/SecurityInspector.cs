@@ -6,8 +6,10 @@ using NativeProcesses.Core.Engine;
 using NativeProcesses.Core.Models;
 using NativeProcesses.Core.Native;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -17,9 +19,18 @@ namespace NativeProcesses.Core.Inspection
     public class SecurityInspector
     {
         private IEngineLogger _logger;
-        private static readonly Dictionary<string, bool> _signatureCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Dictionary<string, IntPtr>> _globalExportCache
-        // Lock-Objekte für Thread-Safety
+        private static readonly ConcurrentDictionary<string, Dictionary<string, ExportEntry>> _globalExportCache
+                    = new ConcurrentDictionary<string, Dictionary<string, ExportEntry>>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly ConcurrentDictionary<string, bool> _signatureCache
+            = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+        public struct ExportEntry
+        {
+            public uint Rva;
+            public string ForwarderString;
+            public bool IsForwarder => !string.IsNullOrEmpty(ForwarderString);
+        }
         private static readonly object _sigLock = new object();
         private static readonly object _exportLock = new object();
 
@@ -73,7 +84,9 @@ namespace NativeProcesses.Core.Inspection
             public IntPtr ExpectedAddress { get; set; }
             public IntPtr ActualAddress { get; set; }
             public string TargetModule { get; set; }
-            public bool IsSafe { get; set; }
+            public HookTrustLevel TrustLevel { get; set; }
+            public string Signer { get; set; }
+            public bool IsSafe { get; set; } // Legacy-Kompatibilität
         }
 
         public class InlineHookInfo
@@ -202,32 +215,135 @@ namespace NativeProcesses.Core.Inspection
             return sb.ToString();
         }
         // --- 2. GetExportAddress (Nutzt Cache) ---
-        public IntPtr GetExportAddress(ManagedProcess process, IntPtr moduleBase, string functionName, List<ProcessModuleInfo> allModules, string moduleNameForCache)
+        //public IntPtr GetExportAddress(ManagedProcess process, IntPtr moduleBase, string functionName, List<ProcessModuleInfo> allModules, string moduleNameForCache, int recursionDepth = 0)
+        //{
+        //    // Schutz vor Endlosschleifen (z.B. A->B->A Forwarding)
+        //    if (recursionDepth > 10) return IntPtr.Zero;
+        //    if (string.IsNullOrEmpty(moduleNameForCache)) return IntPtr.Zero;
+
+        //    Dictionary<string, ExportEntry> map = null;
+
+        //    // 1. Thread-Safe Cache Zugriff
+        //    if (!_globalExportCache.TryGetValue(moduleNameForCache, out map))
+        //    {
+        //        var moduleInfo = allModules.FirstOrDefault(m => m.BaseDllName.Equals(moduleNameForCache, StringComparison.OrdinalIgnoreCase));
+        //        // Fallback: Wenn FullDllName leer ist, versuchen wir ihn zu erraten (System32)
+        //        string path = moduleInfo?.FullDllName;
+        //        if (string.IsNullOrEmpty(path))
+        //        {
+        //            path = Path.Combine(Environment.SystemDirectory, moduleNameForCache);
+        //            if (!path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) path += ".dll";
+        //        }
+
+        //        if (File.Exists(path))
+        //        {
+        //            map = BuildExportMapFromDisk(path);
+        //            _globalExportCache.TryAdd(moduleNameForCache, map);
+        //        }
+        //    }
+
+        //    if (map != null && map.TryGetValue(functionName, out ExportEntry entry))
+        //    {
+        //        if (entry.IsForwarder)
+        //        {
+        //            // Forwarder String parsen (Format: "DLLName.FunctionName" oder "DLLName.#Ordinal")
+        //            string fwd = entry.ForwarderString;
+        //            int dotIdx = fwd.IndexOf('.');
+        //            if (dotIdx > 0)
+        //            {
+        //                string targetDllName = fwd.Substring(0, dotIdx);
+        //                string targetFunc = fwd.Substring(dotIdx + 1);
+
+        //                if (!targetDllName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        //                    targetDllName += ".dll";
+
+        //                var targetMod = allModules.FirstOrDefault(m => m.BaseDllName.Equals(targetDllName, StringComparison.OrdinalIgnoreCase));
+
+        //                // Rekursion: Wir springen zur nächsten DLL
+        //                if (targetMod != null)
+        //                {
+        //                    // WICHTIG: Wir rufen uns selbst auf mit der neuen DLL
+        //                    return GetExportAddress(process, targetMod.DllBase, targetFunc, allModules, targetMod.BaseDllName, recursionDepth + 1);
+        //                }
+        //            }
+        //            // Sackgasse (Modul nicht geladen) -> 0
+        //            return IntPtr.Zero;
+        //        }
+        //        else
+        //        {
+        //            // Volltreffer: Echte Adresse berechnen
+        //            return IntPtr.Add(moduleBase, (int)entry.Rva);
+        //        }
+        //    }
+
+        //    return IntPtr.Zero;
+        //}
+        public IntPtr GetExportAddress(ManagedProcess process, IntPtr moduleBase, string functionName, List<ProcessModuleInfo> allModules, string moduleNameForCache, int recursionDepth = 0)
         {
-            try
+            // Schutz vor Endlosschleifen (max 5 Hops bei Forwarding)
+            if (recursionDepth > 5) return IntPtr.Zero;
+            if (string.IsNullOrEmpty(moduleNameForCache)) return IntPtr.Zero;
+
+            Dictionary<string, ExportEntry> map = null;
+
+            // 1. Cache Lookup (Thread Safe)
+            if (!_globalExportCache.TryGetValue(moduleNameForCache, out map))
             {
-                if (!string.IsNullOrEmpty(moduleNameForCache))
+                var moduleInfo = allModules.FirstOrDefault(m => m.BaseDllName.Equals(moduleNameForCache, StringComparison.OrdinalIgnoreCase));
+                // Versuchen, den Pfad zu finden, auch wenn wir nur den Namen haben (z.B. "kernelbase.dll" aus einem Forwarder String)
+                string path = moduleInfo?.FullDllName;
+
+                if (string.IsNullOrEmpty(path))
                 {
-                    // Cache Read
-                    lock (_exportLock)
+                    // Fallback: Suche in System32
+                    path = Path.Combine(Environment.SystemDirectory, moduleNameForCache);
+                    if (!path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !Path.HasExtension(path)) path += ".dll";
+                }
+
+                if (File.Exists(path))
+                {
+                    // Lade Golden Image von Platte (Forwarder-Aware!)
+                    map = BuildExportMapFromDisk(path);
+                    _globalExportCache.TryAdd(moduleNameForCache, map);
+                }
+            }
+
+            if (map != null && map.TryGetValue(functionName, out ExportEntry entry))
+            {
+                if (entry.IsForwarder)
+                {
+                    // Forwarder String parsen (Format: "DLLName.FunctionName" oder "DLLName.#Ordinal")
+                    // Beispiel: "NTDLL.RtlAllocateHeap"
+                    string fwd = entry.ForwarderString;
+                    int dotIdx = fwd.IndexOf('.');
+                    if (dotIdx > 0)
                     {
-                        if (_globalExportCache.ContainsKey(moduleNameForCache))
+                        string targetDllName = fwd.Substring(0, dotIdx);
+                        string targetFunc = fwd.Substring(dotIdx + 1);
+
+                        // Wenn keine Extension, .dll anhängen
+                        if (!targetDllName.Contains(".")) targetDllName += ".dll";
+
+                        var targetMod = allModules.FirstOrDefault(m => m.BaseDllName.Equals(targetDllName, StringComparison.OrdinalIgnoreCase));
+
+                        // REKURSION: Wir springen zur nächsten DLL
+                        if (targetMod != null)
                         {
-                            return _globalExportCache[moduleNameForCache].TryGetValue(functionName, out IntPtr cached) ? cached : IntPtr.Zero;
+                            // Wir rufen uns selbst auf, aber mit der NEUEN DllBase und dem NEUEN Namen
+                            return GetExportAddress(process, targetMod.DllBase, targetFunc, allModules, targetMod.BaseDllName, recursionDepth + 1);
                         }
                     }
-                    // Cache Miss -> Build
-                    var map = BuildExportMap(process, moduleBase);
-                    // Cache Write
-                    lock (_exportLock)
-                    {
-                        if (!_globalExportCache.ContainsKey(moduleNameForCache)) _globalExportCache[moduleNameForCache] = map;
-                        return map.TryGetValue(functionName, out IntPtr addr) ? addr : IntPtr.Zero;
-                    }
+                    // Sackgasse (Modul nicht geladen) -> Wir können die Adresse nicht validieren -> 0
+                    return IntPtr.Zero;
                 }
-                return IntPtr.Zero;
+                else
+                {
+                    // Kein Forwarder -> Das ist die echte Adresse (RVA + Base)
+                    return IntPtr.Add(moduleBase, (int)entry.Rva);
+                }
             }
-            catch { return IntPtr.Zero; }
+
+            return IntPtr.Zero;
         }
         public Dictionary<string, IntPtr> BuildExportMap(ManagedProcess process, IntPtr moduleBase)
         {
@@ -243,7 +359,7 @@ namespace NativeProcesses.Core.Inspection
 
                 // NT Header Magic prüfen (32/64 Bit)
                 ushort magic = BitConverter.ToUInt16(headers, e_lfanew + 24);
-                bool is64 = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+                bool is64 = (magic == PE.PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
 
                 // Export Directory RVA und Size finden
                 // 64bit: Offset 136 (112 + 24), 32bit: Offset 120 (96 + 24)
@@ -320,7 +436,77 @@ namespace NativeProcesses.Core.Inspection
             catch { }
             return exportMap;
         }
+        /// <summary>
+        /// Baut die Export-Map direkt von der Festplatte ("Golden Image").
+        /// Erkennt jetzt auch Forwarder Strings!
+        /// </summary>
+        public Dictionary<string, ExportEntry> BuildExportMapFromDisk(string modulePath)
+        {
+            var exportMap = new Dictionary<string, ExportEntry>(StringComparer.OrdinalIgnoreCase);
+            byte[] image = MapFileToMemory(modulePath);
 
+            if (image == null) return exportMap;
+
+            try
+            {
+                int e_lfanew = BitConverter.ToInt32(image, 0x3C);
+                // PE Header Parsing...
+                ushort magic = BitConverter.ToUInt16(image, e_lfanew + 24);
+                bool is64 = (magic == PE.PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+                int exportDirOffset = e_lfanew + 24 + (is64 ? 112 : 96);
+
+                uint exportRva = BitConverter.ToUInt32(image, exportDirOffset);
+                uint exportSize = BitConverter.ToUInt32(image, exportDirOffset + 4);
+
+                if (exportRva == 0 || exportRva >= image.Length) return exportMap;
+
+                int dirOffset = (int)exportRva;
+                uint numberOfFunctions = BitConverter.ToUInt32(image, dirOffset + 20);
+                uint numberOfNames = BitConverter.ToUInt32(image, dirOffset + 24);
+                uint addressOfFunctions = BitConverter.ToUInt32(image, dirOffset + 28);
+                uint addressOfNames = BitConverter.ToUInt32(image, dirOffset + 32);
+                uint addressOfOrdinals = BitConverter.ToUInt32(image, dirOffset + 36);
+
+                for (int i = 0; i < numberOfNames; i++)
+                {
+                    uint nameRva = BitConverter.ToUInt32(image, (int)addressOfNames + (i * 4));
+                    if (nameRva == 0 || nameRva >= image.Length) continue;
+
+                    string name = ReadStringFromBuffer(image, (int)nameRva);
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    ushort ordinal = BitConverter.ToUInt16(image, (int)addressOfOrdinals + (i * 2));
+                    if (ordinal >= numberOfFunctions) continue;
+
+                    uint funcRva = BitConverter.ToUInt32(image, (int)addressOfFunctions + (ordinal * 4));
+
+                    // LOGIK: Wenn die Funktions-Adresse INNERHALB des Export-Verzeichnisses liegt, 
+                    // ist es ein Forwarder-String, kein Code!
+                    bool isForwarder = (funcRva >= exportRva && funcRva < (exportRva + exportSize));
+
+                    var entry = new ExportEntry { Rva = funcRva };
+
+                    if (isForwarder)
+                    {
+                        entry.ForwarderString = ReadStringFromBuffer(image, (int)funcRva);
+                    }
+
+                    if (!exportMap.ContainsKey(name))
+                    {
+                        exportMap[name] = entry;
+                    }
+                }
+            }
+            catch { }
+            return exportMap;
+        }
+        // Kleiner Helper für lokales Lesen
+        private string ReadStringFromBuffer(byte[] buffer, int offset)
+        {
+            int end = offset;
+            while (end < buffer.Length && buffer[end] != 0) end++;
+            return Encoding.ASCII.GetString(buffer, offset, end - offset);
+        }
         // Helper: Versucht Daten aus dem lokalen Blob zu holen, sonst liest er nach
         private byte[] ReadRelocatedData(ManagedProcess process, IntPtr moduleBase, uint targetRva, uint size, uint exportStartRva, byte[] exportBlob)
         {
@@ -364,8 +550,8 @@ namespace NativeProcesses.Core.Inspection
 
             try
             {
-                PeStructs.IMAGE_DOS_HEADER dosHeader;
-                PeStructs.IMAGE_FILE_HEADER fileHeader;
+                PE.PeHeaders.IMAGE_DOS_HEADER dosHeader;
+                PE.PeHeaders.IMAGE_FILE_HEADER fileHeader;
                 ushort magic;
 
                 var sectionsOnDisk = GetPeHeadersFromFile(module.FullDllName, out dosHeader, out fileHeader, out magic);
@@ -506,28 +692,28 @@ namespace NativeProcesses.Core.Inspection
 
             try
             {
-                byte[] dosHeaderBytes = process.ReadMemory(moduleBase, Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER)));
-                var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(dosHeaderBytes);
+                byte[] dosHeaderBytes = process.ReadMemory(moduleBase, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_DOS_HEADER)));
+                var dosHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_DOS_HEADER>(dosHeaderBytes);
                 if (!dosHeader.IsValid)
                 {
                     return IntPtr.Zero;
                 }
 
                 IntPtr ntHeaderAddr = IntPtr.Add(moduleBase, dosHeader.e_lfanew);
-                byte[] ntHeaderMagicBytes = process.ReadMemory(IntPtr.Add(ntHeaderAddr, 4 + Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER))), sizeof(ushort));
+                byte[] ntHeaderMagicBytes = process.ReadMemory(IntPtr.Add(ntHeaderAddr, 4 + Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_FILE_HEADER))), sizeof(ushort));
                 ushort magic = BitConverter.ToUInt16(ntHeaderMagicBytes, 0);
 
-                PeStructs.IMAGE_DATA_DIRECTORY exportDirectory;
+                PE.PeHeaders.IMAGE_DATA_DIRECTORY exportDirectory;
 
-                if (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+                if (magic == PE.PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
                 {
-                    byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS64)));
-                    exportDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS64>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_EXPORT];
+                    byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_NT_HEADERS64)));
+                    exportDirectory = ByteArrayToStructure<PE.PeHeaders.IMAGE_NT_HEADERS64>(ntHeaderBytes).OptionalHeader.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_EXPORT];
                 }
                 else
                 {
-                    byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS32)));
-                    exportDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS32>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_EXPORT];
+                    byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_NT_HEADERS32)));
+                    exportDirectory = ByteArrayToStructure<PE.PeHeaders.IMAGE_NT_HEADERS32>(ntHeaderBytes).OptionalHeader.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_EXPORT];
                 }
 
                 if (exportDirectory.VirtualAddress == 0)
@@ -536,7 +722,7 @@ namespace NativeProcesses.Core.Inspection
                 }
 
                 IntPtr exportDirAddr = IntPtr.Add(moduleBase, (int)exportDirectory.VirtualAddress);
-                var eat = ByteArrayToStructure<PeStructs.IMAGE_EXPORT_DIRECTORY>(process.ReadMemory(exportDirAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_EXPORT_DIRECTORY))));
+                var eat = ByteArrayToStructure<PE.PeHeaders.IMAGE_EXPORT_DIRECTORY>(process.ReadMemory(exportDirAddr, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_EXPORT_DIRECTORY))));
 
                 IntPtr pFunctions = IntPtr.Add(moduleBase, (int)eat.AddressOfFunctions);
                 IntPtr pNames = IntPtr.Add(moduleBase, (int)eat.AddressOfNames);
@@ -636,85 +822,85 @@ namespace NativeProcesses.Core.Inspection
             }
         }
 
-        private PeStructs.IMAGE_SECTION_HEADER[] GetPeHeadersFromFile(string filePath, out PeStructs.IMAGE_DOS_HEADER dosHeader, out PeStructs.IMAGE_FILE_HEADER fileHeader, out ushort magic)
+        private PE.PeHeaders.IMAGE_SECTION_HEADER[] GetPeHeadersFromFile(string filePath, out PE.PeHeaders.IMAGE_DOS_HEADER dosHeader, out PE.PeHeaders.IMAGE_FILE_HEADER fileHeader, out ushort magic)
         {
-            byte[] buffer = ReadBytesFromFile(filePath, 0, (uint)Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER)));
-            dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(buffer);
+            byte[] buffer = ReadBytesFromFile(filePath, 0, (uint)Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_DOS_HEADER)));
+            dosHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_DOS_HEADER>(buffer);
             if (!dosHeader.IsValid)
             {
                 throw new Exception($"Invalid DOS header for file {filePath}.");
             }
 
-            buffer = ReadBytesFromFile(filePath, (uint)dosHeader.e_lfanew, sizeof(uint) + (uint)Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER)));
-            fileHeader = ByteArrayToStructure<PeStructs.IMAGE_FILE_HEADER>(buffer, 4);
+            buffer = ReadBytesFromFile(filePath, (uint)dosHeader.e_lfanew, sizeof(uint) + (uint)Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_FILE_HEADER)));
+            fileHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_FILE_HEADER>(buffer, 4);
 
-            int optionalHeaderOffset = dosHeader.e_lfanew + 4 + Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER));
+            int optionalHeaderOffset = dosHeader.e_lfanew + 4 + Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_FILE_HEADER));
             buffer = ReadBytesFromFile(filePath, (uint)optionalHeaderOffset, sizeof(ushort));
             magic = BitConverter.ToUInt16(buffer, 0);
 
             int sectionHeaderOffset = optionalHeaderOffset + fileHeader.SizeOfOptionalHeader;
-            int sectionHeaderSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_SECTION_HEADER));
+            int sectionHeaderSize = Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_SECTION_HEADER));
 
-            PeStructs.IMAGE_SECTION_HEADER[] sections = new PeStructs.IMAGE_SECTION_HEADER[fileHeader.NumberOfSections];
+            PE.PeHeaders.IMAGE_SECTION_HEADER[] sections = new PE.PeHeaders.IMAGE_SECTION_HEADER[fileHeader.NumberOfSections];
             buffer = ReadBytesFromFile(filePath, (uint)sectionHeaderOffset, (uint)(sectionHeaderSize * fileHeader.NumberOfSections));
 
             for (int i = 0; i < fileHeader.NumberOfSections; i++)
             {
                 byte[] sectionBytes = new byte[sectionHeaderSize];
                 Array.Copy(buffer, i * sectionHeaderSize, sectionBytes, 0, sectionHeaderSize);
-                sections[i] = ByteArrayToStructure<PeStructs.IMAGE_SECTION_HEADER>(sectionBytes);
+                sections[i] = ByteArrayToStructure<PE.PeHeaders.IMAGE_SECTION_HEADER>(sectionBytes);
             }
             return sections;
         }
 
-        private PeStructs.IMAGE_SECTION_HEADER[] GetPeHeadersFromMemory(ManagedProcess process, IntPtr moduleBase, out PeStructs.IMAGE_DOS_HEADER dosHeader, out PeStructs.IMAGE_FILE_HEADER fileHeader, out ushort magic, out PeStructs.IMAGE_DATA_DIRECTORY relocDir)
+        private PE.PeHeaders.IMAGE_SECTION_HEADER[] GetPeHeadersFromMemory(ManagedProcess process, IntPtr moduleBase, out PE.PeHeaders.IMAGE_DOS_HEADER dosHeader, out PE.PeHeaders.IMAGE_FILE_HEADER fileHeader, out ushort magic, out PE.PeHeaders.IMAGE_DATA_DIRECTORY relocDir)
         {
-            byte[] buffer = process.ReadMemory(moduleBase, Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER)));
-            dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(buffer);
+            byte[] buffer = process.ReadMemory(moduleBase, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_DOS_HEADER)));
+            dosHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_DOS_HEADER>(buffer);
             if (!dosHeader.IsValid)
             {
                 throw new Exception($"Invalid DOS header in memory at {moduleBase.ToString("X")}.");
             }
 
             IntPtr ntHeaderAddr = IntPtr.Add(moduleBase, dosHeader.e_lfanew);
-            buffer = process.ReadMemory(ntHeaderAddr, sizeof(uint) + Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER)));
-            fileHeader = ByteArrayToStructure<PeStructs.IMAGE_FILE_HEADER>(buffer, 4);
+            buffer = process.ReadMemory(ntHeaderAddr, sizeof(uint) + Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_FILE_HEADER)));
+            fileHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_FILE_HEADER>(buffer, 4);
 
-            IntPtr optionalHeaderAddr = IntPtr.Add(ntHeaderAddr, 4 + Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER)));
+            IntPtr optionalHeaderAddr = IntPtr.Add(ntHeaderAddr, 4 + Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_FILE_HEADER)));
             buffer = process.ReadMemory(optionalHeaderAddr, sizeof(ushort));
             magic = BitConverter.ToUInt16(buffer, 0);
 
             IntPtr sectionHeaderAddr = IntPtr.Add(optionalHeaderAddr, fileHeader.SizeOfOptionalHeader);
-            int sectionHeaderSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_SECTION_HEADER));
+            int sectionHeaderSize = Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_SECTION_HEADER));
 
-            PeStructs.IMAGE_SECTION_HEADER[] sections = new PeStructs.IMAGE_SECTION_HEADER[fileHeader.NumberOfSections];
+            PE.PeHeaders.IMAGE_SECTION_HEADER[] sections = new PE.PeHeaders.IMAGE_SECTION_HEADER[fileHeader.NumberOfSections];
             buffer = process.ReadMemory(sectionHeaderAddr, sectionHeaderSize * fileHeader.NumberOfSections);
 
             for (int i = 0; i < fileHeader.NumberOfSections; i++)
             {
                 byte[] sectionBytes = new byte[sectionHeaderSize];
                 Array.Copy(buffer, i * sectionHeaderSize, sectionBytes, 0, sectionHeaderSize);
-                sections[i] = ByteArrayToStructure<PeStructs.IMAGE_SECTION_HEADER>(sectionBytes);
+                sections[i] = ByteArrayToStructure<PE.PeHeaders.IMAGE_SECTION_HEADER>(sectionBytes);
             }
 
-            relocDir = new PeStructs.IMAGE_DATA_DIRECTORY();
-            if (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+            relocDir = new PE.PeHeaders.IMAGE_DATA_DIRECTORY();
+            if (magic == PE.PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
             {
-                byte[] optHeaderBytes = process.ReadMemory(optionalHeaderAddr, Marshal.SizeOf<PeStructs.IMAGE_OPTIONAL_HEADER64>());
-                var optHeader = ByteArrayToStructure<PeStructs.IMAGE_OPTIONAL_HEADER64>(optHeaderBytes);
-                relocDir = optHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC];
+                byte[] optHeaderBytes = process.ReadMemory(optionalHeaderAddr, Marshal.SizeOf<PE.PeHeaders.IMAGE_OPTIONAL_HEADER64>());
+                var optHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_OPTIONAL_HEADER64>(optHeaderBytes);
+                relocDir = optHeader.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_BASERELOC];
             }
             else
             {
-                byte[] optHeaderBytes = process.ReadMemory(optionalHeaderAddr, Marshal.SizeOf<PeStructs.IMAGE_OPTIONAL_HEADER32>());
-                var optHeader = ByteArrayToStructure<PeStructs.IMAGE_OPTIONAL_HEADER32>(optHeaderBytes);
-                relocDir = optHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_BASERELOC];
+                byte[] optHeaderBytes = process.ReadMemory(optionalHeaderAddr, Marshal.SizeOf<PE.PeHeaders.IMAGE_OPTIONAL_HEADER32>());
+                var optHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_OPTIONAL_HEADER32>(optHeaderBytes);
+                relocDir = optHeader.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_BASERELOC];
             }
 
             return sections;
         }
 
-        private HashSet<uint> ParseRelocations(ManagedProcess process, IntPtr moduleBase, PeStructs.IMAGE_DATA_DIRECTORY relocDir, bool isWow64)
+        private HashSet<uint> ParseRelocations(ManagedProcess process, IntPtr moduleBase, PE.PeHeaders.IMAGE_DATA_DIRECTORY relocDir, bool isWow64)
         {
             var relocOffsets = new HashSet<uint>();
             if (relocDir.VirtualAddress == 0 || relocDir.Size == 0)
@@ -726,12 +912,12 @@ namespace NativeProcesses.Core.Inspection
             {
                 IntPtr currentRelocAddr = IntPtr.Add(moduleBase, (int)relocDir.VirtualAddress);
                 IntPtr relocEndAddr = IntPtr.Add(currentRelocAddr, (int)relocDir.Size);
-                int relocBlockSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_BASE_RELOCATION));
+                int relocBlockSize = Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_BASE_RELOCATION));
 
                 while (currentRelocAddr.ToInt64() < relocEndAddr.ToInt64())
                 {
                     byte[] blockHeaderBytes = process.ReadMemory(currentRelocAddr, relocBlockSize);
-                    var relocBlock = ByteArrayToStructure<PeStructs.IMAGE_BASE_RELOCATION>(blockHeaderBytes);
+                    var relocBlock = ByteArrayToStructure<PE.PeHeaders.IMAGE_BASE_RELOCATION>(blockHeaderBytes);
 
                     if (relocBlock.VirtualAddress == 0 || relocBlock.SizeOfBlock == 0)
                         break;
@@ -746,12 +932,12 @@ namespace NativeProcesses.Core.Inspection
                         ushort type = (ushort)(entry >> 12);
                         uint offset = (uint)(entry & 0x0FFF);
 
-                        if (type == PeStructs.IMAGE_REL_BASED_DIR64 || type == PeStructs.IMAGE_REL_BASED_HIGHLOW)
+                        if (type == PE.PeHeaders.IMAGE_REL_BASED_DIR64 || type == PE.PeHeaders.IMAGE_REL_BASED_HIGHLOW)
                         {
                             uint relocRva = relocBlock.VirtualAddress + offset;
                             relocOffsets.Add(relocRva);
 
-                            int ptrSize = (type == PeStructs.IMAGE_REL_BASED_DIR64) ? 8 : 4;
+                            int ptrSize = (type == PE.PeHeaders.IMAGE_REL_BASED_DIR64) ? 8 : 4;
                             for (int p = 1; p < ptrSize; p++)
                             {
                                 relocOffsets.Add(relocRva + (uint)p);
@@ -774,30 +960,30 @@ namespace NativeProcesses.Core.Inspection
         //    var exportMap = new Dictionary<string, IntPtr>(StringComparer.OrdinalIgnoreCase);
         //    try
         //    {
-        //        byte[] dosHeaderBytes = process.ReadMemory(moduleBase, Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER)));
-        //        var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(dosHeaderBytes);
+        //        byte[] dosHeaderBytes = process.ReadMemory(moduleBase, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_DOS_HEADER)));
+        //        var dosHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_DOS_HEADER>(dosHeaderBytes);
         //        if (!dosHeader.IsValid) return exportMap;
 
         //        IntPtr ntHeaderAddr = IntPtr.Add(moduleBase, dosHeader.e_lfanew);
-        //        byte[] ntHeaderMagicBytes = process.ReadMemory(IntPtr.Add(ntHeaderAddr, 4 + Marshal.SizeOf(typeof(PeStructs.IMAGE_FILE_HEADER))), sizeof(ushort));
+        //        byte[] ntHeaderMagicBytes = process.ReadMemory(IntPtr.Add(ntHeaderAddr, 4 + Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_FILE_HEADER))), sizeof(ushort));
         //        ushort magic = BitConverter.ToUInt16(ntHeaderMagicBytes, 0);
 
-        //        PeStructs.IMAGE_DATA_DIRECTORY exportDirectory;
-        //        if (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        //        PE.PeHeaders.IMAGE_DATA_DIRECTORY exportDirectory;
+        //        if (magic == PE.PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
         //        {
-        //            byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS64)));
-        //            exportDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS64>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_EXPORT];
+        //            byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_NT_HEADERS64)));
+        //            exportDirectory = ByteArrayToStructure<PE.PeHeaders.IMAGE_NT_HEADERS64>(ntHeaderBytes).OptionalHeader.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_EXPORT];
         //        }
         //        else
         //        {
-        //            byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS32)));
-        //            exportDirectory = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS32>(ntHeaderBytes).OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_EXPORT];
+        //            byte[] ntHeaderBytes = process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_NT_HEADERS32)));
+        //            exportDirectory = ByteArrayToStructure<PE.PeHeaders.IMAGE_NT_HEADERS32>(ntHeaderBytes).OptionalHeader.DataDirectory[PE.PeHeaders.IMAGE_DIRECTORY_ENTRY_EXPORT];
         //        }
 
         //        if (exportDirectory.VirtualAddress == 0) return exportMap;
 
         //        IntPtr exportDirAddr = IntPtr.Add(moduleBase, (int)exportDirectory.VirtualAddress);
-        //        var eat = ByteArrayToStructure<PeStructs.IMAGE_EXPORT_DIRECTORY>(process.ReadMemory(exportDirAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_EXPORT_DIRECTORY))));
+        //        var eat = ByteArrayToStructure<PE.PeHeaders.IMAGE_EXPORT_DIRECTORY>(process.ReadMemory(exportDirAddr, Marshal.SizeOf(typeof(PE.PeHeaders.IMAGE_EXPORT_DIRECTORY))));
 
         //        IntPtr pFunctions = IntPtr.Add(moduleBase, (int)eat.AddressOfFunctions);
         //        IntPtr pNames = IntPtr.Add(moduleBase, (int)eat.AddressOfNames);
@@ -839,7 +1025,7 @@ namespace NativeProcesses.Core.Inspection
         //    }
         //    return exportMap;
         //}
-        private PeStructs.IMAGE_SECTION_HEADER FindSection(PeStructs.IMAGE_SECTION_HEADER[] sections, string sectionName)
+        private PE.PeHeaders.IMAGE_SECTION_HEADER FindSection(PE.PeHeaders.IMAGE_SECTION_HEADER[] sections, string sectionName)
         {
             foreach (var section in sections)
             {
@@ -850,429 +1036,211 @@ namespace NativeProcesses.Core.Inspection
             }
             throw new Exception($"Section '{sectionName}' not found.");
         }
-        public List<IatHookInfo> CheckIatHooks(ManagedProcess process, IntPtr moduleToScanBase, string moduleToScanName, Dictionary<string, IntPtr> unused, List<ProcessModuleInfo> allModules, List<VirtualMemoryRegion> regions)
-        {
-            var results = new List<IatHookInfo>();
-            bool isWow64 = process.GetIsWow64();
-            int ptrSize = isWow64 ? 4 : 8;
-
-            var moduleBounds = new Dictionary<string, ProcessModuleInfo>(StringComparer.OrdinalIgnoreCase);
-            foreach (var mod in allModules) if (!moduleBounds.ContainsKey(mod.BaseDllName)) moduleBounds[mod.BaseDllName] = mod;
-
-            try
-            {
-                byte[] dosBuffer = SafeRead(process, moduleToScanBase, 64);
-                if (dosBuffer == null) return results;
-                var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(dosBuffer);
-                if (!dosHeader.IsValid) return results;
-
-                IntPtr ntAddr = IntPtr.Add(moduleToScanBase, dosHeader.e_lfanew);
-                byte[] ntMagic = SafeRead(process, IntPtr.Add(ntAddr, 24), 2);
-                if (ntMagic == null) return results;
-                ushort magic = BitConverter.ToUInt16(ntMagic, 0);
-
-                bool is64 = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
-
-                // Bestimme Import Dir Offset
-                // OptionalHeader start ist ntAddr + 24
-                // DataDirectory ist am Ende des OptionalHeader.
-                // 32bit OptionalHeader ist 224 bytes (96 bytes Standard + 128 bytes DataDir) -> DataDir ist bei Offset 96
-                // 64bit OptionalHeader ist 240 bytes (112 bytes Standard + 128 bytes DataDir) -> DataDir ist bei Offset 112
-                int dataDirOffsetInOptHeader = is64 ? 112 : 96;
-                IntPtr dataDirAddr = IntPtr.Add(ntAddr, 24 + dataDirOffsetInOptHeader + (int)PeStructs.IMAGE_DIRECTORY_ENTRY_IMPORT * 8);
-
-                byte[] importDirBytes = SafeRead(process, dataDirAddr, 8); // RVA + Size
-                if (importDirBytes == null) return results;
-                uint importRva = BitConverter.ToUInt32(importDirBytes, 0);
-                uint importSize = BitConverter.ToUInt32(importDirBytes, 4);
-
-                if (importRva == 0 || importSize == 0) return results;
-
-                IntPtr importDescAddr = IntPtr.Add(moduleToScanBase, (int)importRva);
-                int descriptorSize = 20; // IMAGE_IMPORT_DESCRIPTOR
-
-                while (true)
-                {
-                    byte[] descBytes = SafeRead(process, importDescAddr, descriptorSize);
-                    if (descBytes == null) break;
-
-                    // Manuelles Parsing
-                    int nameRva = BitConverter.ToInt32(descBytes, 12);
-                    int firstThunkRva = BitConverter.ToInt32(descBytes, 16);
-                    int originalFirstThunkRva = BitConverter.ToInt32(descBytes, 0); // Characteristics/OriginalFirstThunk
-
-                    if (nameRva == 0 && firstThunkRva == 0) break;
-
-                    if (originalFirstThunkRva == 0) originalFirstThunkRva = firstThunkRva;
-
-                    string dllName = ReadNullTerminatedString(process, IntPtr.Add(moduleToScanBase, nameRva));
-
-                    // Validierung (um Garbage zu filtern)
-                    if (string.IsNullOrEmpty(dllName) || dllName.Length < 4)
-                    {
-                        importDescAddr = IntPtr.Add(importDescAddr, descriptorSize);
-                        continue;
-                    }
-
-                    ProcessModuleInfo targetModule = null;
-                    moduleBounds.TryGetValue(dllName, out targetModule);
-
-                    IntPtr thunkAddr = IntPtr.Add(moduleToScanBase, firstThunkRva);
-                    int thunkIndex = 0;
-
-                    // KEIN aggressiver Circuit Breaker, da der alte Code das auch nicht hatte.
-                    // SafeRead verhindert Crashes, das reicht.
-
-                    while (true)
-                    {
-                        byte[] ptrBytes = SafeRead(process, thunkAddr, ptrSize);
-                        if (ptrBytes == null) break; // Speicher nicht lesbar -> Ende der Thunks oder Page Boundary
-
-                        ulong funcVal = isWow64 ? BitConverter.ToUInt32(ptrBytes, 0) : BitConverter.ToUInt64(ptrBytes, 0);
-                        if (funcVal == 0) break; // Ende der Import-Liste
-
-                        IntPtr actualAddress = (IntPtr)funcVal;
-
-                        // Quick Check: Ist Adresse im Zielmodul?
-                        bool isInRange = false;
-                        if (targetModule != null)
-                        {
-                            long start = targetModule.DllBase.ToInt64();
-                            if ((long)funcVal >= start && (long)funcVal < (start + targetModule.SizeOfImage)) isInRange = true;
-                        }
-
-                        if (!isInRange)
-                        {
-                            string funcName = GetImportName(process, moduleToScanBase, (uint)originalFirstThunkRva, thunkIndex, isWow64);
-
-                            if (!string.IsNullOrEmpty(funcName) && funcName != "[Error]")
-                            {
-                                IntPtr expectedAddress = IntPtr.Zero;
-                                if (targetModule != null)
-                                    expectedAddress = GetExportAddress(process, targetModule.DllBase, funcName, allModules, targetModule.BaseDllName);
-
-                                if (expectedAddress != IntPtr.Zero && actualAddress != expectedAddress)
-                                {
-                                    string targetLoc = ResolveTargetAddress(actualAddress, process, allModules, regions);
-                                    bool isSafe = IsSafeHookTarget(targetLoc, allModules);
-                                    results.Add(new IatHookInfo { ModuleName = moduleToScanName, FunctionName = $"{dllName}!{funcName}", ExpectedAddress = expectedAddress, ActualAddress = actualAddress, TargetModule = targetLoc, IsSafe = isSafe });
-                                }
-                                else if (expectedAddress == IntPtr.Zero)
-                                {
-                                    string targetLoc = ResolveTargetAddress(actualAddress, process, allModules, regions);
-                                    if (targetLoc.StartsWith("PRIVATE_MEMORY"))
-                                        results.Add(new IatHookInfo { ModuleName = moduleToScanName, FunctionName = $"{dllName}!{funcName}", ExpectedAddress = IntPtr.Zero, ActualAddress = actualAddress, TargetModule = targetLoc, IsSafe = false });
-                                }
-                            }
-                        }
-                        thunkAddr = IntPtr.Add(thunkAddr, ptrSize);
-                        thunkIndex++;
-                        if (thunkIndex > 4000) break; // Safety
-                    }
-                    importDescAddr = IntPtr.Add(importDescAddr, descriptorSize);
-                }
-            }
-            catch (Exception ex) { _logger?.Log(LogLevel.Debug, $"IAT Scan failed: {ex.Message}", null); }
-            return results;
-        }
-        //public List<IatHookInfo> CheckIatHooks(ManagedProcess process,
-        //                                          IntPtr moduleToScanBase,
-        //                                          string moduleToScanName,
-        //                                          Dictionary<string, IntPtr> ntdllExports, // Legacy
-        //                                          List<ProcessModuleInfo> allModules,
-        //                                          List<VirtualMemoryRegion> regions)
-        //{
-        //    var results = new List<IatHookInfo>();
-        //    bool isWow64 = process.GetIsWow64();
-        //    int ptrSize = isWow64 ? 4 : 8;
-
-        //    var moduleBounds = new Dictionary<string, ProcessModuleInfo>(StringComparer.OrdinalIgnoreCase);
-        //    foreach (var mod in allModules)
-        //    {
-        //        if (!moduleBounds.ContainsKey(mod.BaseDllName))
-        //            moduleBounds[mod.BaseDllName] = mod;
-        //    }
-
-        //    try
-        //    {
-        //        var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(process.ReadMemory(moduleToScanBase, Marshal.SizeOf(typeof(PeStructs.IMAGE_DOS_HEADER))));
-        //        if (!dosHeader.IsValid) return results;
-
-        //        IntPtr ntHeaderAddr = IntPtr.Add(moduleToScanBase, dosHeader.e_lfanew);
-        //        ushort magic = BitConverter.ToUInt16(process.ReadMemory(IntPtr.Add(ntHeaderAddr, 24), 2), 0);
-        //        bool is64BitPE = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
-
-        //        PeStructs.IMAGE_DATA_DIRECTORY importDir;
-        //        if (is64BitPE)
-        //        {
-        //            var nt64 = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS64>(process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS64))));
-        //            importDir = nt64.OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_IMPORT];
-        //        }
-        //        else
-        //        {
-        //            var nt32 = ByteArrayToStructure<PeStructs.IMAGE_NT_HEADERS32>(process.ReadMemory(ntHeaderAddr, Marshal.SizeOf(typeof(PeStructs.IMAGE_NT_HEADERS32))));
-        //            importDir = nt32.OptionalHeader.DataDirectory[PeStructs.IMAGE_DIRECTORY_ENTRY_IMPORT];
-        //        }
-
-        //        if (importDir.VirtualAddress == 0 || importDir.Size == 0) return results;
-
-        //        IntPtr importDescAddr = IntPtr.Add(moduleToScanBase, (int)importDir.VirtualAddress);
-        //        int descriptorSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_IMPORT_DESCRIPTOR));
-
-        //        while (true)
-        //        {
-        //            var desc = ByteArrayToStructure<PeStructs.IMAGE_IMPORT_DESCRIPTOR>(process.ReadMemory(importDescAddr, descriptorSize));
-        //            if (desc.Name == 0 && desc.FirstThunk == 0) break;
-
-        //            string dllName = ReadNullTerminatedString(process, IntPtr.Add(moduleToScanBase, (int)desc.Name));
-
-        //            // VALIDIERUNG: Import Descriptor prüfen
-        //            if (string.IsNullOrEmpty(dllName) || dllName.Length < 4 ||
-        //                (!dllName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !dllName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)))
-        //            {
-        //                importDescAddr = IntPtr.Add(importDescAddr, descriptorSize);
-        //                continue;
-        //            }
-
-        //            ProcessModuleInfo targetModule = null;
-        //            moduleBounds.TryGetValue(dllName, out targetModule);
-
-        //            IntPtr thunkAddr = IntPtr.Add(moduleToScanBase, (int)desc.FirstThunk);
-        //            int thunkIndex = 0;
-        //            int consecutiveErrors = 0;
-
-        //            while (true)
-        //            {
-        //                ulong funcAddrVal = ReadUIntPtr(process, thunkAddr, isWow64);
-        //                if (funcAddrVal == 0) break;
-
-        //                IntPtr actualAddress = (IntPtr)funcAddrVal;
-        //                bool isInRange = false;
-        //                if (targetModule != null)
-        //                {
-        //                    long start = targetModule.DllBase.ToInt64();
-        //                    long end = start + targetModule.SizeOfImage;
-        //                    if ((long)funcAddrVal >= start && (long)funcAddrVal < end) isInRange = true;
-        //                }
-
-        //                if (!isInRange)
-        //                {
-        //                    string funcName = GetImportName(process, moduleToScanBase, (uint)(desc.OriginalFirstThunk != 0 ? desc.OriginalFirstThunk : desc.FirstThunk), thunkIndex, isWow64);
-
-        //                    // NOTBREMSE
-        //                    if (string.IsNullOrEmpty(funcName) || funcName == "[Error]")
-        //                    {
-        //                        consecutiveErrors++;
-        //                        if (consecutiveErrors > 5) break; // Abort DLL
-        //                    }
-        //                    else
-        //                    {
-        //                        consecutiveErrors = 0;
-        //                        IntPtr expectedAddress = IntPtr.Zero;
-
-        //                        // Cache nutzen!
-        //                        if (targetModule != null)
-        //                        {
-        //                            expectedAddress = GetExportAddress(process, targetModule.DllBase, funcName, allModules, targetModule.BaseDllName);
-        //                        }
-
-        //                        if (expectedAddress != IntPtr.Zero && actualAddress != expectedAddress)
-        //                        {
-        //                            string targetLocation = ResolveTargetAddress(actualAddress, process, allModules, regions);
-        //                            bool isSafe = IsSafeHookTarget(targetLocation, allModules);
-
-        //                            results.Add(new IatHookInfo
-        //                            {
-        //                                ModuleName = moduleToScanName,
-        //                                FunctionName = $"{dllName}!{funcName}",
-        //                                ExpectedAddress = expectedAddress,
-        //                                ActualAddress = actualAddress,
-        //                                TargetModule = targetLocation,
-        //                                IsSafe = isSafe
-        //                            });
-        //                        }
-        //                        else if (expectedAddress == IntPtr.Zero)
-        //                        {
-        //                            string targetLocation = ResolveTargetAddress(actualAddress, process, allModules, regions);
-        //                            if (targetLocation.StartsWith("PRIVATE_MEMORY"))
-        //                            {
-        //                                results.Add(new IatHookInfo
-        //                                {
-        //                                    ModuleName = moduleToScanName,
-        //                                    FunctionName = $"{dllName}!{funcName}",
-        //                                    ExpectedAddress = IntPtr.Zero,
-        //                                    ActualAddress = actualAddress,
-        //                                    TargetModule = targetLocation,
-        //                                    IsSafe = false
-        //                                });
-        //                            }
-        //                        }
-        //                    }
-        //                }
-
-        //                thunkAddr = IntPtr.Add(thunkAddr, ptrSize);
-        //                thunkIndex++;
-        //                if (thunkIndex > 5000) break; // Safety Break
-        //            }
-
-        //            importDescAddr = IntPtr.Add(importDescAddr, descriptorSize);
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        _logger?.Log(LogLevel.Debug, $"IAT Scan failed for {moduleToScanName}: {ex.Message}", null);
-        //    }
-
-        //    return results;
-        //}
-
         public List<InlineHookInfo> CheckForInlineHooks(ManagedProcess process, IntPtr moduleBase, string modulePath, List<ProcessModuleInfo> modules, List<VirtualMemoryRegion> regions)
         {
             var results = new List<InlineHookInfo>();
-            if (string.IsNullOrEmpty(modulePath) || !System.IO.File.Exists(modulePath)) return results;
+            if (string.IsNullOrEmpty(modulePath) || !File.Exists(modulePath)) return results;
+
             try
             {
-                byte[] localMappedImage = null;
-                try { localMappedImage = PeEmulation.MapAndRelocate(modulePath, moduleBase); } catch { return results; }
-                var dosHeader = ByteArrayToStructure<PeStructs.IMAGE_DOS_HEADER>(localMappedImage, 0);
+                byte[] diskImage = PeEmulation.MapAndRelocate(modulePath, moduleBase);
+                if (diskImage == null) return results;
+
+                var dosHeader = ByteArrayToStructure<PE.PeHeaders.IMAGE_DOS_HEADER>(diskImage);
                 int ntOffset = dosHeader.e_lfanew;
-                ushort magic = BitConverter.ToUInt16(localMappedImage, ntOffset + 24);
-                bool is64Bit = (magic == PeStructs.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
-                ushort numberOfSections = BitConverter.ToUInt16(localMappedImage, ntOffset + 4 + 2);
-                ushort sizeOfOptionalHeader = BitConverter.ToUInt16(localMappedImage, ntOffset + 4 + 16);
-                int sectionHeadersOffset = ntOffset + 24 + sizeOfOptionalHeader;
-                int sectionSize = Marshal.SizeOf(typeof(PeStructs.IMAGE_SECTION_HEADER));
 
-                for (int i = 0; i < numberOfSections; i++)
+                ushort magic = BitConverter.ToUInt16(diskImage, ntOffset + 24);
+                bool is64Bit = (magic == PE.PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+
+                uint sizeOfImage = is64Bit
+                    ? BitConverter.ToUInt32(diskImage, ntOffset + 24 + 56)
+                    : BitConverter.ToUInt32(diskImage, ntOffset + 24 + 56);
+
+                long moduleStart = moduleBase.ToInt64();
+                long moduleEnd = moduleStart + sizeOfImage;
+
+                ushort numSections = BitConverter.ToUInt16(diskImage, ntOffset + 6);
+                ushort sizeOptHeader = BitConverter.ToUInt16(diskImage, ntOffset + 20);
+                int sectionStart = ntOffset + 24 + sizeOptHeader;
+                int sectionSize = 40;
+
+                // 1. Relocations parsen
+                HashSet<uint> relocationRvas = new HashSet<uint>();
+                int dataDirOffset = is64Bit ? 112 : 96;
+                int relocDirOffset = ntOffset + 24 + dataDirOffset + (5 * 8);
+                uint relocAddr = BitConverter.ToUInt32(diskImage, relocDirOffset);
+                uint relocSize = BitConverter.ToUInt32(diskImage, relocDirOffset + 4);
+
+                if (relocAddr > 0 && relocSize > 0 && relocAddr + relocSize <= diskImage.Length)
                 {
-                    var sec = ByteArrayToStructure<PeStructs.IMAGE_SECTION_HEADER>(localMappedImage, sectionHeadersOffset + (i * sectionSize));
-                    bool isExecutable = (sec.Characteristics & 0x20000000) != 0;
-                    if (isExecutable && sec.VirtualSize > 0)
+                    uint currentPos = 0;
+                    while (currentPos < relocSize)
                     {
-                        IntPtr remoteSectionAddress = IntPtr.Add(moduleBase, (int)sec.VirtualAddress);
-                        int sizeToCompare = Math.Min((int)sec.VirtualSize, (int)sec.SizeOfRawData);
-                        if (sizeToCompare > 0 && (sec.VirtualAddress + sizeToCompare) <= localMappedImage.Length)
+                        uint blockRva = BitConverter.ToUInt32(diskImage, (int)(relocAddr + currentPos));
+                        uint blockSize = BitConverter.ToUInt32(diskImage, (int)(relocAddr + currentPos + 4));
+                        if (blockSize == 0) break;
+                        int entryCount = (int)(blockSize - 8) / 2;
+                        for (int i = 0; i < entryCount; i++)
                         {
-                            // SafeRead
-                            byte[] remoteBytes = SafeRead(process, remoteSectionAddress, sizeToCompare);
-                            if (remoteBytes == null) continue;
-
-                            for (int k = 0; k < sizeToCompare; k++)
+                            ushort entry = BitConverter.ToUInt16(diskImage, (int)(relocAddr + currentPos + 8 + (i * 2)));
+                            ushort type = (ushort)(entry >> 12);
+                            int offset = entry & 0x0FFF;
+                            if (type == 3 || type == 10)
                             {
-                                if (localMappedImage[sec.VirtualAddress + k] != remoteBytes[k])
+                                uint rvaToSkip = blockRva + (uint)offset;
+                                int bytesToSkip = (type == 10) ? 8 : 4;
+                                for (int b = 0; b < bytesToSkip; b++) relocationRvas.Add(rvaToSkip + (uint)b);
+                            }
+                        }
+                        currentPos += blockSize;
+                    }
+                }
+
+                for (int i = 0; i < numSections; i++)
+                {
+                    if (results.Count > 50)
+                    {
+                        results.Clear();
+                        results.Add(new InlineHookInfo
+                        {
+                            ModuleName = Path.GetFileName(modulePath),
+                            HookType = "High Anomaly Count (Packed?)",
+                            IsSafe = false,
+                            TargetModule = "Analysis Aborted",
+                            TargetAddress = IntPtr.Zero
+                        });
+                        return results;
+                    }
+
+                    var sec = ByteArrayToStructure<PE.PeHeaders.IMAGE_SECTION_HEADER>(diskImage, sectionStart + (i * sectionSize));
+
+                    bool isExecutable = (sec.Characteristics & 0x20000000) != 0;
+                    bool isWritable = (sec.Characteristics & 0x80000000) != 0;
+
+                    if (isExecutable && !isWritable && sec.VirtualSize > 0)
+                    {
+                        byte[] memBytes = SafeRead(process, IntPtr.Add(moduleBase, (int)sec.VirtualAddress), (int)sec.VirtualSize);
+                        if (memBytes == null) continue;
+
+                        int compareLen = Math.Min(memBytes.Length, (int)sec.SizeOfRawData);
+
+                        for (int k = 0; k < compareLen; k++)
+                        {
+                            int rva = (int)sec.VirtualAddress + k;
+
+                            if (relocationRvas.Contains((uint)rva)) continue;
+                            if (diskImage[rva] == 0xCC || diskImage[rva] == 0x00 || diskImage[rva] == 0x90) continue;
+
+                            if (memBytes[k] != diskImage[rva])
+                            {
+                                // --- NEU: Expliziter Filter für E8->E9 Thunks (Everything.exe Fix) ---
+                                // Wenn auf Disk ein CALL (E8) ist und im RAM ein JMP (E9), ist das ein Linker-Fixup.
+                                if (diskImage[rva] == 0xE8 && memBytes[k] == 0xE9)
                                 {
-                                    var hookInfo = AnalyzeHook(process, remoteBytes, k, IntPtr.Add(remoteSectionAddress, k), !is64Bit);
-                                    if (hookInfo != null)
+                                    continue; // Ignorieren!
+                                }
+                                // ---------------------------------------------------------------------
+
+                                byte opcode = memBytes[k];
+                                // Nur relevante Opcodes prüfen
+                                bool isLikelyHook = (opcode == 0xE9 || opcode == 0xE8 || opcode == 0xFF || opcode == 0x68 || opcode == 0xEB);
+
+                                if (!isLikelyHook) continue;
+
+                                var hook = AnalyzeHook(process, memBytes, k, IntPtr.Add(moduleBase, rva), !is64Bit);
+
+                                if (hook != null)
+                                {
+                                    long targetVal = hook.TargetAddress.ToInt64();
+                                    if (targetVal == 0) continue;
+
+                                    // Range Check (wie gehabt)
+                                    if (targetVal >= moduleStart && targetVal < moduleEnd)
                                     {
-                                        hookInfo.ModuleName = System.IO.Path.GetFileName(modulePath);
-                                        hookInfo.SectionName = sec.Name;
-                                        hookInfo.Offset = k;
-                                        hookInfo.OriginalByte = localMappedImage[sec.VirtualAddress + k];
-                                        hookInfo.PatchedByte = remoteBytes[k];
-                                        hookInfo.TargetModule = ResolveTargetAddress(hookInfo.TargetAddress, process, modules, regions);
-                                        hookInfo.IsSafe = IsSafeHookTarget(hookInfo.TargetModule, modules);
-                                        results.Add(hookInfo);
-                                        k += (hookInfo.HookSize - 1);
+                                        k += (hook.HookSize - 1);
+                                        continue;
                                     }
+
+                                    hook.ModuleName = Path.GetFileName(modulePath);
+                                    hook.SectionName = sec.Name;
+                                    hook.Offset = k;
+                                    hook.OriginalByte = diskImage[rva];
+                                    hook.PatchedByte = memBytes[k];
+                                    hook.TargetModule = ResolveTargetAddress(hook.TargetAddress, process, modules, regions);
+                                    hook.IsSafe = IsSafeHookTarget(hook.TargetModule, modules);
+
+                                    results.Add(hook);
+                                    k += (hook.HookSize - 1);
                                 }
                             }
                         }
-                    }
-                }
-            }
-            catch { }
-            return results;
-        }
-
-        private InlineHookInfo AnalyzeHook(ManagedProcess process, byte[] memBytes, int offset, IntPtr patchAddress, bool isWow64)
-        {
-            if (offset >= memBytes.Length)
-            {
-                return null;
-            }
-
-            byte op = memBytes[offset];
-
-            try
-            {
-                if (op == 0xE9 && offset + 4 < memBytes.Length)
-                {
-                    int relativeOffset = BitConverter.ToInt32(memBytes, offset + 1);
-                    IntPtr targetAddress = IntPtr.Add(patchAddress, 5 + relativeOffset);
-                    return new InlineHookInfo
-                    {
-                        HookType = "JMP_REL32",
-                        HookSize = 5,
-                        TargetAddress = targetAddress
-                    };
-                }
-
-                if (isWow64 && op == 0x68 && offset + 5 < memBytes.Length && memBytes[offset + 5] == 0xC3)
-                {
-                    uint targetAddress32 = BitConverter.ToUInt32(memBytes, offset + 1);
-                    return new InlineHookInfo
-                    {
-                        HookType = "PUSH_RET_32",
-                        HookSize = 6,
-                        TargetAddress = (IntPtr)targetAddress32
-                    };
-                }
-
-                if (op == 0xFF && offset + 5 < memBytes.Length && memBytes[offset + 1] == 0x25)
-                {
-                    int relativeOffset = BitConverter.ToInt32(memBytes, offset + 2);
-                    IntPtr pointerAddress;
-                    if (isWow64)
-                    {
-                        pointerAddress = (IntPtr)relativeOffset;
-                    }
-                    else
-                    {
-                        pointerAddress = IntPtr.Add(patchAddress, 6 + relativeOffset);
-                    }
-
-                    IntPtr targetAddress = ReadIntPtr(process, pointerAddress, isWow64);
-
-                    return new InlineHookInfo
-                    {
-                        HookType = isWow64 ? "JMP_ABS_32" : "JMP_RIP_REL_64",
-                        HookSize = 6,
-                        TargetAddress = targetAddress
-                    };
-                }
-
-                if (!isWow64 && op == 0x48 && offset + 11 < memBytes.Length && memBytes[offset + 1] == 0xB8)
-                {
-                    if (memBytes[offset + 10] == 0xFF && memBytes[offset + 11] == 0xE0)
-                    {
-                        long targetAddress64 = BitConverter.ToInt64(memBytes, offset + 2);
-                        return new InlineHookInfo
-                        {
-                            HookType = "MOV_RAX_JMP_RAX_64",
-                            HookSize = 12,
-                            TargetAddress = (IntPtr)targetAddress64
-                        };
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger?.Log(LogLevel.Error, "SecurityInspector.AnalyzeHook failed", ex);
-                return null;
+                _logger?.Log(LogLevel.Debug, $"InlineHook check failed: {ex.Message}");
+            }
+            return results;
+        }
+        private InlineHookInfo AnalyzeHook(ManagedProcess process, byte[] bytes, int offset, IntPtr currentAddr, bool isWow64)
+        {
+            if (offset >= bytes.Length) return null;
+            byte op = bytes[offset];
+
+            // Wir unterstützen hier die wichtigsten Opcodes für Hooks
+            // 0xE9 = JMP Rel32
+            // 0xE8 = CALL Rel32 (oft für Trampolines genutzt)
+            // 0xEB = JMP Rel8 (Short Jump)
+
+            if (op == 0xE9 || op == 0xE8)
+            {
+                if (offset + 4 >= bytes.Length) return null;
+                int rel = BitConverter.ToInt32(bytes, offset + 1);
+                IntPtr target = IntPtr.Add(currentAddr, 5 + rel);
+                string type = op == 0xE9 ? "JMP (Rel32)" : "CALL (Rel32)";
+                return new InlineHookInfo { HookType = type, HookSize = 5, TargetAddress = target };
             }
 
-            return new InlineHookInfo
+            if (op == 0xEB) // JMP Short
             {
-                HookType = "UNKNOWN_PATCH",
-                HookSize = 1,
-                TargetAddress = IntPtr.Zero
-            };
-        }
+                if (offset + 1 >= bytes.Length) return null;
+                sbyte rel = (sbyte)bytes[offset + 1];
+                IntPtr target = IntPtr.Add(currentAddr, 2 + rel);
+                return new InlineHookInfo { HookType = "JMP (Short)", HookSize = 2, TargetAddress = target };
+            }
 
-        public string ResolveTargetAddress(IntPtr targetAddress,
-                                            ManagedProcess process,
-                                            List<ProcessModuleInfo> modules,
-                                            List<VirtualMemoryRegion> regions)
+            // Absolute Jumps (x86/x64 Indirect)
+            if (op == 0xFF && offset + 1 < bytes.Length)
+            {
+                byte sub = bytes[offset + 1];
+                if (sub == 0x25) // JMP [RIP+...] (x64) oder JMP [Addr] (x86)
+                {
+                    // Adressberechnung erfordert Lesen des Pointers, das sparen wir hier für Performance
+                    // Wir geben einfach zurück DASS es ein JMP ist, aber Target 0.
+                    // Im Loop oben wird Target 0 ignoriert, was korrekt ist, da wir indirekte Sprünge schwer validieren können ohne Pointer-Read.
+                    // (Hier könnte man noch ReadMemory einbauen, wenn man *sehr* genau sein will)
+                    return new InlineHookInfo { HookType = "JMP Indirect", HookSize = 6, TargetAddress = IntPtr.Zero };
+                }
+            }
+
+            if (op == 0x68 && isWow64) // PUSH Imm32
+            {
+                if (offset + 5 >= bytes.Length) return null;
+                uint addr = BitConverter.ToUInt32(bytes, offset + 1);
+                return new InlineHookInfo { HookType = "PUSH", HookSize = 5, TargetAddress = (IntPtr)addr };
+            }
+
+            if (!isWow64 && op == 0x48 && offset + 2 < bytes.Length && bytes[offset + 1] == 0xB8) // MOV RAX, Imm64
+            {
+                if (offset + 10 >= bytes.Length) return null;
+                long addr = BitConverter.ToInt64(bytes, offset + 2);
+                return new InlineHookInfo { HookType = "MOV RAX", HookSize = 10, TargetAddress = (IntPtr)addr };
+            }
+
+            return null;
+        }
+        public string ResolveTargetAddress(IntPtr targetAddress, ManagedProcess process, List<ProcessModuleInfo> modules, List<VirtualMemoryRegion> regions)
         {
             if (targetAddress == IntPtr.Zero) return "N/A";
             long target = targetAddress.ToInt64();
@@ -1283,7 +1251,6 @@ namespace NativeProcesses.Core.Inspection
 
                 long start = mod.DllBase.ToInt64();
                 long end = start + mod.SizeOfImage;
-
                 if (target >= start && target < end)
                 {
                     string symbol = FindNearestExport(process, mod.DllBase, targetAddress);
@@ -1305,11 +1272,14 @@ namespace NativeProcesses.Core.Inspection
 
                 if (target >= regionStart && target < regionEnd)
                 {
-                    return $"PRIVATE_MEMORY ({region.Type} / {region.Protection})";
+                    string flags = region.Protection;
+                    if (region.Type == "Private") return $"PRIVATE_MEMORY ({flags})";
+                    if (region.Type == "Mapped") return $"Mapped Memory ({flags})";
+                    return $"{region.Type} ({flags})";
                 }
             }
 
-            return "UNKNOWN_REGION";
+            return "Unbacked / Unknown Memory";
         }
 
         private string FindNearestExport(ManagedProcess process, IntPtr moduleBase, IntPtr targetAddress)
@@ -1600,16 +1570,38 @@ namespace NativeProcesses.Core.Inspection
 
         private string GetImportName(ManagedProcess process, IntPtr moduleBase, uint originalFirstThunkRva, int thunkIndex, bool isWow64)
         {
-            int ptrSize = isWow64 ? 4 : 8;
-            IntPtr nameThunkAddr = IntPtr.Add(moduleBase, (int)originalFirstThunkRva + (thunkIndex * ptrSize));
-            byte[] ptrBytes = SafeRead(process, nameThunkAddr, ptrSize);
-            if (ptrBytes == null) return null;
+            try
+            {
+                int ptrSize = isWow64 ? 4 : 8;
+                // Adresse des Eintrags in der Import Name Table (INT)
+                IntPtr nameThunkAddr = IntPtr.Add(moduleBase, (int)originalFirstThunkRva + (thunkIndex * ptrSize));
 
-            ulong nameRva = isWow64 ? BitConverter.ToUInt32(ptrBytes, 0) : BitConverter.ToUInt64(ptrBytes, 0);
-            if ((nameRva & (isWow64 ? 0x8000000000000000 : 0x80000000)) != 0) return $"Ordinal {nameRva & 0xFFFF}";
-            if (nameRva == 0 || nameRva > 0x10000000) return null;
+                byte[] ptrBytes = SafeRead(process, nameThunkAddr, ptrSize);
+                if (ptrBytes == null) return null;
 
-            return ReadNullTerminatedString(process, IntPtr.Add(moduleBase, (int)nameRva + 2));
+                ulong nameRvaVal = isWow64 ? BitConverter.ToUInt32(ptrBytes, 0) : BitConverter.ToUInt64(ptrBytes, 0);
+
+                // Check auf Ordinal Import (High Bit gesetzt)
+                // 32-Bit: 0x80000000, 64-Bit: 0x8000000000000000
+                bool isOrdinal = isWow64
+                    ? (nameRvaVal & 0x80000000) != 0
+                    : (nameRvaVal & 0x8000000000000000) != 0;
+
+                if (isOrdinal)
+                {
+                    return $"#{nameRvaVal & 0xFFFF}"; // Import by Ordinal
+                }
+
+                if (nameRvaVal == 0 || nameRvaVal > 0x7FFFFFFF) return null; // Invalid RVA
+
+                // Name RVA lesen (IMAGE_IMPORT_BY_NAME Struktur: Hint(2) + Name)
+                // Wir addieren 2 Bytes, um den "Hint" zu überspringen und direkt zum String zu kommen.
+                return ReadNullTerminatedString(process, IntPtr.Add(moduleBase, (int)nameRvaVal + 2));
+            }
+            catch
+            {
+                return "[Error]";
+            }
         }
         public List<string> CheckForModuleOverloading(ManagedProcess process, List<ProcessModuleInfo> modules)
         {
@@ -1656,47 +1648,129 @@ namespace NativeProcesses.Core.Inspection
             return devicePath;
         }
 
-        private bool IsSafeHookTarget(string targetModulePath, List<ProcessModuleInfo> allModules)
+        public bool IsSafeHookTarget(string targetModuleInfo, List<ProcessModuleInfo> allModules)
         {
-            if (string.IsNullOrEmpty(targetModulePath)) return false;
+            if (string.IsNullOrEmpty(targetModuleInfo)) return false;
 
-            string dllName = targetModulePath.Contains("!") ? targetModulePath.Split('!')[0] : targetModulePath;
-            dllName = dllName.Split('+')[0].Trim();
+            // Extrahiere den DLL-Namen (z.B. aus "antivirus.dll!ScanFunction")
+            string dllName = targetModuleInfo.Split('!')[0].Trim(); // Alles vor dem "!"
+            dllName = dllName.Split('+')[0].Trim(); // Alles vor dem Offset "+"
 
-            if (_signatureCache.TryGetValue(dllName, out bool cachedResult))
+            // Wenn es keine DLL ist (z.B. "Private Memory"), ist es nie sicher!
+            if (dllName.Contains("Private") || dllName.Contains("Unbacked")) return false;
+
+            // Cache Check
+            if (_signatureCache.TryGetValue(dllName, out bool isTrusted))
             {
-                return cachedResult;
+                return isTrusted;
             }
 
-            var targetMod = allModules.FirstOrDefault(m => m.BaseDllName.Equals(dllName, StringComparison.OrdinalIgnoreCase));
-            if (targetMod == null)
+            // Modul in der Liste suchen
+            var module = allModules.FirstOrDefault(m => m.BaseDllName.Equals(dllName, StringComparison.OrdinalIgnoreCase));
+            if (module == null)
             {
-                _signatureCache[dllName] = false;
+                // DLL nicht gefunden -> Unsicher
+                _signatureCache.TryAdd(dllName, false);
                 return false;
             }
 
             try
             {
-                var sig = SignatureVerifier.Verify(targetMod.FullDllName);
-                bool isTrusted = sig.IsSigned && (
-                    sig.SignerName.Contains("Microsoft") ||
-                    sig.SignerName.Contains("Bitdefender") ||
-                    sig.SignerName.Contains("Symantec") ||
-                    sig.SignerName.Contains("McAfee") ||
-                    sig.SignerName.Contains("CrowdStrike") ||
-                    sig.SignerName.Contains("SentinelOne") ||
-                    sig.SignerName.Contains("Kaspersky") ||
-                    sig.SignerName.Contains("ESET") ||
-                    sig.SignerName.Contains("Sophos")
-                );
+                // Digitale Signatur prüfen
+                var sigInfo = SignatureVerifier.Verify(module.FullDllName);
 
-                _signatureCache[dllName] = isTrusted;
-                return isTrusted;
+                if (!sigInfo.IsSigned)
+                {
+                    _signatureCache.TryAdd(dllName, false);
+                    return false;
+                }
+
+                string signer = sigInfo.SignerName.ToLowerInvariant();
+
+                // Whitelist bekannter Sicherheits-Vendors & Microsoft
+                bool safe = signer.Contains("microsoft") ||
+                            signer.Contains("windows") ||
+                            signer.Contains("crowdstrike") ||
+                            signer.Contains("bitdefender") ||
+                            signer.Contains("symantec") ||
+                            signer.Contains("mcafee") ||
+                            signer.Contains("avast") ||
+                            signer.Contains("eset") ||
+                            signer.Contains("kaspersky") ||
+                            signer.Contains("sentinel one") ||
+                            signer.Contains("sophos") ||
+                            signer.Contains("carbon black") ||
+                            signer.Contains("cylance") ||
+                            signer.Contains("trend micro");
+
+                _signatureCache.TryAdd(dllName, safe);
+                return safe;
             }
             catch
             {
-                _signatureCache[dllName] = false;
                 return false;
+            }
+        }        // --- NEU: Golden Image Helper ---
+
+        /// <summary>
+        /// Lädt eine DLL von der Festplatte und mappt sie manuell in ein Byte-Array,
+        /// sodass RVA-Zugriffe funktionieren (ähnlich wie LoadLibrary, aber passiv).
+        /// </summary>
+        private byte[] MapFileToMemory(string filePath)
+        {
+            try
+            {
+                if (!System.IO.File.Exists(filePath)) return null;
+
+                byte[] rawFile = System.IO.File.ReadAllBytes(filePath);
+
+                // DOS Header prüfen
+                if (rawFile.Length < 64 || rawFile[0] != 'M' || rawFile[1] != 'Z') return null;
+
+                int e_lfanew = BitConverter.ToInt32(rawFile, 0x3C);
+                if (e_lfanew >= rawFile.Length - 264) return null;
+
+                // Optional Header für SizeOfImage lesen
+                ushort magic = BitConverter.ToUInt16(rawFile, e_lfanew + 24);
+                bool is64 = (magic == PE.PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+                int sizeOfImageOffset = e_lfanew + 24 + 56; // Offset in OptionalHeader
+
+                uint sizeOfImage = BitConverter.ToUInt32(rawFile, sizeOfImageOffset);
+
+                // Virtuellen Speicher simulieren
+                byte[] virtualImage = new byte[sizeOfImage];
+
+                // Header kopieren (SizeOfHeaders steht an Offset 60 im Optional Header)
+                uint sizeOfHeaders = BitConverter.ToUInt32(rawFile, e_lfanew + 24 + 60);
+                Array.Copy(rawFile, 0, virtualImage, 0, Math.Min(rawFile.Length, sizeOfHeaders));
+
+                // Sektionen mappen
+                ushort numberOfSections = BitConverter.ToUInt16(rawFile, e_lfanew + 6);
+                ushort sizeOfOptionalHeader = BitConverter.ToUInt16(rawFile, e_lfanew + 20);
+                int sectionHeaderStart = e_lfanew + 24 + sizeOfOptionalHeader;
+                int sectionSize = 40; // IMAGE_SECTION_HEADER size
+
+                for (int i = 0; i < numberOfSections; i++)
+                {
+                    int entryOffset = sectionHeaderStart + (i * sectionSize);
+
+                    uint virtualAddress = BitConverter.ToUInt32(rawFile, entryOffset + 12);
+                    uint sizeOfRawData = BitConverter.ToUInt32(rawFile, entryOffset + 16);
+                    uint pointerToRawData = BitConverter.ToUInt32(rawFile, entryOffset + 20);
+
+                    if (pointerToRawData > 0 && sizeOfRawData > 0 &&
+                        (pointerToRawData + sizeOfRawData) <= rawFile.Length &&
+                        (virtualAddress + sizeOfRawData) <= virtualImage.Length)
+                    {
+                        Array.Copy(rawFile, (int)pointerToRawData, virtualImage, (int)virtualAddress, (int)sizeOfRawData);
+                    }
+                }
+
+                return virtualImage;
+            }
+            catch
+            {
+                return null;
             }
         }
     }

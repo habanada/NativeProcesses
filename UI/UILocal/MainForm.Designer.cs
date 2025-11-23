@@ -35,6 +35,7 @@ namespace ProcessDemo
             this.richTextBox1 = new System.Windows.Forms.RichTextBox();
             this.panel1 = new System.Windows.Forms.Panel();
             this.panel4 = new System.Windows.Forms.Panel();
+            this.button1 = new System.Windows.Forms.Button();
             this.lblFilter = new System.Windows.Forms.Label();
             this.panel3 = new System.Windows.Forms.Panel();
             this.label1 = new System.Windows.Forms.Label();
@@ -87,6 +88,16 @@ namespace ProcessDemo
             this.panel4.Size = new System.Drawing.Size(107, 52);
             this.panel4.TabIndex = 6;
             // 
+            // button1
+            // 
+            this.button1.Location = new System.Drawing.Point(869, 28);
+            this.button1.Name = "button1";
+            this.button1.Size = new System.Drawing.Size(75, 23);
+            this.button1.TabIndex = 2;
+            this.button1.Text = "button1";
+            this.button1.UseVisualStyleBackColor = true;
+            this.button1.Click += new System.EventHandler(this.button1_Click);
+            // 
             // lblFilter
             // 
             this.lblFilter.AutoSize = true;
@@ -98,6 +109,7 @@ namespace ProcessDemo
             // 
             // panel3
             // 
+            this.panel3.Controls.Add(this.button1);
             this.panel3.Controls.Add(this.label1);
             this.panel3.Controls.Add(this.cmbScanFlags);
             this.panel3.Controls.Add(this.btnScanAll);
@@ -255,6 +267,7 @@ namespace ProcessDemo
         private System.Windows.Forms.CheckBox chkAutoScanNew;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.ComboBox cmbScanFlags;
+        private System.Windows.Forms.Button button1;
     }
 }
 

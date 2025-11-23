@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 
 namespace NativeProcesses.Core.Native
 {
-    internal static class NativeDefinitions
+    public static class NativeDefinitions
     {
         public static class NtStatus
         {
@@ -256,6 +256,204 @@ namespace NativeProcesses.Core.Native
                 IntPtr userStreamParam,
                 IntPtr callbackParam);
         }
+        // In NativeProcesses.Core.Native.NativeDefinitions
 
+        public enum KTHREAD_STATE
+        {
+            Initialized,
+            Ready,
+            Running,
+            Standby,
+            Terminated,
+            Waiting,
+            Transition,
+            DeferredReady,
+            GateWaitObsolete,
+            WaitingForProcessInSwap,
+            MaximumThreadState
+        }
+
+        public enum KWAIT_REASON
+        {
+            Executive,
+            FreePage,
+            PageIn,
+            PoolAllocation,
+            DelayExecution,
+            Suspended,
+            UserRequest,
+            WrExecutive,
+            WrFreePage,
+            WrPageIn,
+            WrPoolAllocation,
+            WrDelayExecution,
+            WrSuspended,
+            WrUserRequest,
+            WrEventPair,
+            WrQueue,
+            WrLpcReceive,
+            WrLpcReply,
+            WrVirtualMemory,
+            WrPageOut,
+            WrRendezvous,
+            WrKeyedEvent,
+            WrTerminated,
+            WrProcessInSwap,
+            WrCpuRateControl,
+            WrCalloutStack,
+            WrKernel,
+            WrResource,
+            WrPushLock,
+            WrMutex,
+            WrQuantumEnd,
+            WrDispatchInt,
+            WrPreempted,
+            WrYieldExecution,
+            WrFastMutex,
+            WrGuardedMutex,
+            WrRundown,
+            WrAlertByThreadId,
+            WrDeferredPreempt,
+            WrPhysicalFault,
+            MaximumWaitReason
+        }
+
+        // Context Flags für x64
+        public const uint CONTEXT_AMD64 = 0x00100000;
+        public const uint CONTEXT_CONTROL = CONTEXT_AMD64 | 0x00000001; // SS:SP, CS:IP, FLAGS, BP
+        public const uint CONTEXT_INTEGER = CONTEXT_AMD64 | 0x00000002; // RAX, RBX, RCX, RDX, RSI, RDI, R8-R15
+        public const uint CONTEXT_SEGMENTS = CONTEXT_AMD64 | 0x00000004; // DS, ES, FS, GS
+        public const uint CONTEXT_FLOATING_POINT = CONTEXT_AMD64 | 0x00000008; // XMM0-XMM15
+        public const uint CONTEXT_DEBUG_REGISTERS = CONTEXT_AMD64 | 0x00000010; // Dr0-Dr3, Dr6, Dr7
+        public const uint CONTEXT_FULL = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT;
+
+        [StructLayout(LayoutKind.Sequential, Pack = 16)]
+        public struct CONTEXT
+        {
+            public ulong P1Home;
+            public ulong P2Home;
+            public ulong P3Home;
+            public ulong P4Home;
+            public ulong P5Home;
+            public ulong P6Home;
+
+            public uint ContextFlags;
+            public uint MxCsr;
+
+            public ushort SegCs;
+            public ushort SegDs;
+            public ushort SegEs;
+            public ushort SegFs;
+            public ushort SegGs;
+            public ushort SegSs;
+            public uint EFlags;
+
+            public ulong Dr0;
+            public ulong Dr1;
+            public ulong Dr2;
+            public ulong Dr3;
+            public ulong Dr6;
+            public ulong Dr7;
+
+            public ulong Rax;
+            public ulong Rcx;
+            public ulong Rdx;
+            public ulong Rbx;
+            public ulong Rsp;
+            public ulong Rbp;
+            public ulong Rsi;
+            public ulong Rdi;
+            public ulong R8;
+            public ulong R9;
+            public ulong R10;
+            public ulong R11;
+            public ulong R12;
+            public ulong R13;
+            public ulong R14;
+            public ulong R15;
+            public ulong Rip;
+
+            // ... FPU / XMM registers (vereinfacht: wir brauchen nur bis RIP/RSP für den Scan)
+            // Um Speicherfehler zu vermeiden, reservieren wir hier genug Platz für den Rest.
+            // CONTEXT ist 1232 Bytes auf x64. Bis RIP sind es 248 Bytes (0xF8).
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 512)]
+            public byte[] Extension;
+        }
+
+        // 1. ADDRESS_MODE Enum (wird von ADDRESS64 benötigt)
+        public enum ADDRESS_MODE
+        {
+            AddrMode1616,
+            AddrMode1632,
+            AddrModeReal,
+            AddrModeFlat
+        }
+
+        // 2. ADDRESS64 Struktur
+        [StructLayout(LayoutKind.Sequential)]
+        public struct ADDRESS64
+        {
+            public ulong Offset;
+            public ushort Segment;
+            public ADDRESS_MODE Mode;
+        }
+
+        // 3. KDHELP64 Struktur (wird von STACKFRAME64 benötigt)
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KDHELP64
+        {
+            public ulong Thread;
+            public uint ThCallbackStack;
+            public uint ThCallbackBStore;
+            public uint NextCallback;
+            public uint FramePointer;
+            public ulong KiCallUserMode;
+            public ulong KeUserCallbackDispatcher;
+            public ulong SystemRangeStart;
+            public ulong KiUserExceptionDispatcher;
+            public ulong StackBase;
+            public ulong StackLimit;
+            public ulong BuildVersion; // In neueren Headern: Reserved[5]
+            public ulong Reserved1;
+            public ulong Reserved2;
+            public ulong Reserved3;
+            public ulong Reserved4;
+        }
+
+        // 4. Die gesuchte STACKFRAME64 Struktur
+        [StructLayout(LayoutKind.Sequential)]
+        public struct STACKFRAME64
+        {
+            public ADDRESS64 AddrPC;      // Program Counter (EIP/RIP)
+            public ADDRESS64 AddrReturn;  // Return Address
+            public ADDRESS64 AddrFrame;   // Frame Pointer (EBP/RBP)
+            public ADDRESS64 AddrStack;   // Stack Pointer (ESP/RSP)
+            public ADDRESS64 AddrBStore;  // Backing Store (IA64, sonst ungenutzt)
+
+            public IntPtr FuncTableEntry; // Zeiger auf FPO_DATA etc.
+
+            // Params[4] in C++ -> Wir müssen das Array marshallen
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+            public ulong[] Params;
+
+            [MarshalAs(UnmanagedType.Bool)]
+            public bool Far;
+
+            [MarshalAs(UnmanagedType.Bool)]
+            public bool Virtual;
+
+            // Reserved[3] in C++
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 3)]
+            public ulong[] Reserved;
+
+            public KDHELP64 KdHelp;
+
+            // Helper zum Initialisieren der Arrays, um NullReferenceExceptions zu vermeiden
+            public void Initialize()
+            {
+                Params = new ulong[4];
+                Reserved = new ulong[3];
+            }
+        }
     }
 }

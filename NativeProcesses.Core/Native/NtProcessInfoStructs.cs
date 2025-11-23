@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 
 namespace NativeProcesses.Core.Native
 {
-    internal static class NtProcessInfoStructs
+    public static class NtProcessInfoStructs
     {
         [StructLayout(LayoutKind.Sequential)]
         public struct UNICODE_STRING
