@@ -11,5 +11,7 @@ namespace NativeProcesses.Core.Inspection
         public string AnomalyType { get; set; }
         public string Details { get; set; }
         public string Severity { get; set; }
+        public long Address { get; set; }
+        public int Size { get; set; }
     }
 }

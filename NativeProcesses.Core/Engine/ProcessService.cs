@@ -188,11 +188,7 @@ namespace NativeProcesses.Core.Engine
         {
             if (_processCache.TryGetValue(pid, out FullProcessInfo info))
             {
-                info.TotalReadBytes += readBytesDelta;
-                info.TotalWriteBytes += writeBytesDelta;
-                info.TotalReadOps += readOpsDelta;
-                info.TotalWriteOps += writeOpsDelta;
-                info.TotalPageFaults += pageFaultDelta;
+                info.AddIoStats(readBytesDelta, writeBytesDelta, readOpsDelta, writeOpsDelta);
 
                 var update = new ProcessVolatileUpdate
                 {

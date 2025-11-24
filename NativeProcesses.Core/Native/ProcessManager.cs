@@ -194,7 +194,38 @@ namespace NativeProcesses.Core.Native
                 return results;
             });
         }
+        // ... in ProcessManager ...
 
+        public static Task<List<PeAnomalyInfo>> ScanProcessFileStaticAsync(int pid, IEngineLogger logger = null)
+        {
+            return Task.Run(() =>
+            {
+                var results = new List<PeAnomalyInfo>();
+                string exePath = null;
+
+                try
+                {
+                    using (var proc = new ManagedProcess(pid, ProcessAccessFlags.QueryLimitedInformation))
+                    {
+                        exePath = proc.GetExePath();
+                        // Win32 Path Konvertierung falls nötig
+                        exePath = proc.ConvertNtPathToWin32Path(exePath);
+                    }
+                }
+                catch
+                {
+                    return results;
+                }
+
+                if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
+                {
+                    var engine = new NativeProcesses.Core.Inspection.Static.StaticDotNetEngine(logger);
+                    results.AddRange(engine.ScanFile(exePath));
+                }
+
+                return results;
+            });
+        }
         // --- Main Hook & Anomaly Scan ---
 
         public static async Task<HookDetectionResult> ScanProcessForHooksAsync(FullProcessInfo processInfo, ScanFlags flags = ScanFlags.All, IEngineLogger logger = null)

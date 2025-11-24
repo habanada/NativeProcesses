@@ -91,6 +91,18 @@
     <Reference Include="Microsoft.Win32.Registry, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <HintPath>..\packages\Microsoft.Win32.Registry.5.0.0\lib\net461\Microsoft.Win32.Registry.dll</HintPath>
     </Reference>
+    <Reference Include="Mono.Cecil, Version=0.11.6.0, Culture=neutral, PublicKeyToken=50cebf1cceb9d05e, processorArchitecture=MSIL">
+      <HintPath>..\packages\Mono.Cecil.0.11.6\lib\net40\Mono.Cecil.dll</HintPath>
+    </Reference>
+    <Reference Include="Mono.Cecil.Mdb, Version=0.11.6.0, Culture=neutral, PublicKeyToken=50cebf1cceb9d05e, processorArchitecture=MSIL">
+      <HintPath>..\packages\Mono.Cecil.0.11.6\lib\net40\Mono.Cecil.Mdb.dll</HintPath>
+    </Reference>
+    <Reference Include="Mono.Cecil.Pdb, Version=0.11.6.0, Culture=neutral, PublicKeyToken=50cebf1cceb9d05e, processorArchitecture=MSIL">
+      <HintPath>..\packages\Mono.Cecil.0.11.6\lib\net40\Mono.Cecil.Pdb.dll</HintPath>
+    </Reference>
+    <Reference Include="Mono.Cecil.Rocks, Version=0.11.6.0, Culture=neutral, PublicKeyToken=50cebf1cceb9d05e, processorArchitecture=MSIL">
+      <HintPath>..\packages\Mono.Cecil.0.11.6\lib\net40\Mono.Cecil.Rocks.dll</HintPath>
+    </Reference>
     <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
       <HintPath>..\packages\Newtonsoft.Json.13.0.4\lib\net45\Newtonsoft.Json.dll</HintPath>
     </Reference>
@@ -219,15 +231,32 @@
     <Compile Include="Engine\ProcessMonitorEngine.cs" />
     <Compile Include="Engine\ProcessVolatileUpdate.cs" />
     <Compile Include="Engine\SignatureLoader.cs" />
+    <Compile Include="Inspection\AdvancedPeReconstructor - Kopieren.cs" />
     <Compile Include="Inspection\AdvancedPeReconstructor.cs" />
+    <Compile Include="Inspection\DotNetHeuristicEngine.cs" />
     <Compile Include="Inspection\DotNetInspector.cs" />
     <Compile Include="Inspection\DotNetMalwareScanner.cs" />
     <Compile Include="Inspection\FoundPeHeaderInfo.cs" />
+    <Compile Include="Inspection\Heuristics\AssemblyScanner.cs" />
+    <Compile Include="Inspection\Heuristics\ByteArrayScanner.cs" />
+    <Compile Include="Inspection\Heuristics\CryptoScanner.cs" />
+    <Compile Include="Inspection\Heuristics\DynamicMethodScanner.cs" />
+    <Compile Include="Inspection\Heuristics\EntropyCalculator.cs" />
+    <Compile Include="Inspection\Heuristics\HeuristicEnums.cs" />
+    <Compile Include="Inspection\Heuristics\HeuristicResult.cs" />
+    <Compile Include="Inspection\Heuristics\HotSpotScanner.cs" />
+    <Compile Include="Inspection\Heuristics\MalwareClassifier.cs" />
+    <Compile Include="Inspection\Heuristics\MlFeatureExtractor.cs" />
+    <Compile Include="Inspection\Heuristics\MlFeatureVector.cs" />
+    <Compile Include="Inspection\Heuristics\RatPatternScanner.cs" />
+    <Compile Include="Inspection\Heuristics\RuntimeIlScanner.cs" />
+    <Compile Include="Inspection\Heuristics\StringScanner.cs" />
     <Compile Include="Inspection\HiddenProcessInfo.cs" />
     <Compile Include="Inspection\IatScanner - Kopieren %282%29.cs" />
     <Compile Include="Inspection\IatScanner -liefgut.cs" />
     <Compile Include="Inspection\IatScanner - Kopieren.cs" />
     <Compile Include="Inspection\IatScanner.cs" />
+    <Compile Include="Inspection\IlExtractor.cs" />
     <Compile Include="Inspection\MalwareFamilyDetector.cs" />
     <Compile Include="Inspection\NativeHeapAllocationInfo.cs" />
     <Compile Include="Inspection\ParentProcessInspector.cs" />
@@ -242,6 +271,10 @@
     <Compile Include="Inspection\ShellcodeDetector - Kopieren.cs" />
     <Compile Include="Inspection\ShellcodeDetector.cs" />
     <Compile Include="Inspection\SignatureModel.cs" />
+    <Compile Include="Inspection\Static\StaticDotNetEngine.cs" />
+    <Compile Include="Inspection\Static\StaticIlScanner.cs" />
+    <Compile Include="Inspection\Static\StaticPInvokeScanner.cs" />
+    <Compile Include="Inspection\Static\StaticResourceScanner.cs" />
     <Compile Include="Inspection\ThreadScanner.cs" />
     <Compile Include="Inspection\ThreatIntelInfo.cs" />
     <Compile Include="Inspection\VadScanner.cs" />

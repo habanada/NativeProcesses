@@ -56,34 +56,44 @@ namespace NativeProcesses.Core
             get { lock (_updateLock) { return _commandLine; } }
             set { lock (_updateLock) { _commandLine = value; } }
         }
-
         private long _totalReadBytes;
-        public long TotalReadBytes
-        {
-            get { lock (_updateLock) { return _totalReadBytes; } }
-            set { lock (_updateLock) { _totalReadBytes = value; } }
-        }
-
         private long _totalWriteBytes;
-        public long TotalWriteBytes
-        {
-            get { lock (_updateLock) { return _totalWriteBytes; } }
-            set { lock (_updateLock) { _totalWriteBytes = value; } }
-        }
-
         private long _totalReadOps;
-        public long TotalReadOps
-        {
-            get { lock (_updateLock) { return _totalReadOps; } }
-            set { lock (_updateLock) { _totalReadOps = value; } }
-        }
-
         private long _totalWriteOps;
-        public long TotalWriteOps
-        {
-            get { lock (_updateLock) { return _totalWriteOps; } }
-            set { lock (_updateLock) { _totalWriteOps = value; } }
-        }
+
+        // Getter lesen atomar (auf 64-Bit OS ist long atomar, auf 32-Bit brauchen wir Interlocked.Read)
+        public long TotalReadBytes => System.Threading.Interlocked.Read(ref _totalReadBytes);
+        public long TotalWriteBytes => System.Threading.Interlocked.Read(ref _totalWriteBytes);
+        public long TotalReadOps => System.Threading.Interlocked.Read(ref _totalReadOps);
+        public long TotalWriteOps => System.Threading.Interlocked.Read(ref _totalWriteOps);
+
+        //private long _totalReadBytes;
+        //public long TotalReadBytes
+        //{
+        //    get { lock (_updateLock) { return _totalReadBytes; } }
+        //    set { lock (_updateLock) { _totalReadBytes = value; } }
+        //}
+
+        //private long _totalWriteBytes;
+        //public long TotalWriteBytes
+        //{
+        //    get { lock (_updateLock) { return _totalWriteBytes; } }
+        //    set { lock (_updateLock) { _totalWriteBytes = value; } }
+        //}
+
+        //private long _totalReadOps;
+        //public long TotalReadOps
+        //{
+        //    get { lock (_updateLock) { return _totalReadOps; } }
+        //    set { lock (_updateLock) { _totalReadOps = value; } }
+        //}
+
+        //private long _totalWriteOps;
+        //public long TotalWriteOps
+        //{
+        //    get { lock (_updateLock) { return _totalWriteOps; } }
+        //    set { lock (_updateLock) { _totalWriteOps = value; } }
+        //}
 
         private long _totalPageFaults;
         public long TotalPageFaults
@@ -376,5 +386,13 @@ namespace NativeProcesses.Core
                 this.BasePriority = priority;
             }
         }
+        public void AddIoStats(long rBytes, long wBytes, long rOps, long wOps)
+        {
+            if (rBytes > 0) System.Threading.Interlocked.Add(ref _totalReadBytes, rBytes);
+            if (wBytes > 0) System.Threading.Interlocked.Add(ref _totalWriteBytes, wBytes);
+            if (rOps > 0) System.Threading.Interlocked.Add(ref _totalReadOps, rOps);
+            if (wOps > 0) System.Threading.Interlocked.Add(ref _totalWriteOps, wOps);
+        }
+
     }
 }

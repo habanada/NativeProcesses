@@ -73,39 +73,40 @@ namespace NativeProcesses.Core.Inspection
                         long dllNameOffset = ms.Position;
                         byte[] dllNameBytes = Encoding.ASCII.GetBytes(iat.ModuleName);
                         writer.Write(dllNameBytes);
-                        writer.Write((byte)0); // Null-Terminator
+                        writer.Write((byte)0);
 
-                        // Alignment für Thunks (muss oft Pointer-Aligned sein)
                         AlignStream(ms, is64Bit ? 8 : 4);
 
                         // 2. OriginalFirstThunk Array (INT) schreiben
-                        // Das ist eine Kopie der IAT, zeigt aber auf die Namen
                         long intStartOffset = ms.Position;
-                        var nameRvas = new List<uint>(); // Speichert RVAs der Namen für die Thunks
+                        var nameRvas = new List<uint>();
 
-                        // Platzhalter für das INT Array
                         int ptrSize = is64Bit ? 8 : 4;
                         int thunkCount = iat.Functions.Count;
-                        long intSize = (thunkCount + 1) * ptrSize; // +1 für Null-Terminator
-                        writer.Write(new byte[intSize]);
+                        long tableSize = (thunkCount + 1) * ptrSize; // +1 für Null-Terminator
 
-                        // 3. Import By Name Strukturen schreiben
-                        long currentPosAfterInt = ms.Position;
+                        // Platzhalter für INT schreiben
+                        writer.Write(new byte[tableSize]);
 
-                        // Jetzt füllen wir die Namen und merken uns deren Offsets
+                        // --- NEU: 3. FirstThunk Array (IAT) schreiben ---
+                        // Wir erstellen eine NEUE IAT direkt hinter der INT.
+                        // Der Loader wird diese beim Start mit echten Adressen überschreiben.
+                        long iatStartOffset = ms.Position;
+                        writer.Write(new byte[tableSize]);
+                        // ------------------------------------------------
+
+                        // 4. Import By Name Strukturen schreiben
+                        long currentPosAfterTables = ms.Position;
+
                         for (int f = 0; f < iat.Functions.Count; f++)
                         {
                             var func = iat.Functions[f];
 
-                            // Alignment (2 Byte für Hint)
                             if (ms.Position % 2 != 0) writer.Write((byte)0);
 
                             long nameStructOffset = ms.Position;
 
-                            // IMAGE_IMPORT_BY_NAME: Hint (2 Bytes) + Name (ASCIIZ)
-                            writer.Write((ushort)0); // Hint (egal)
-
-                            // Funktionsname holen (hier vereinfacht, in Realität brauchen wir den Namen aus dem Export-Scan)
+                            writer.Write((ushort)0); // Hint
                             string funcName = func.ResolvedName ?? $"Func_{func.Address:X}";
                             writer.Write(Encoding.ASCII.GetBytes(funcName));
                             writer.Write((byte)0);
@@ -114,38 +115,45 @@ namespace NativeProcesses.Core.Inspection
                             nameRvas.Add((uint)nameStructOffset);
                         }
 
-                        // 4. INT (OriginalFirstThunk) Array nachträglich befüllen
+                        // 5. Tabellen befüllen (INT und IAT müssen identisch auf die Namen zeigen!)
                         long endPos = ms.Position;
-                        ms.Position = intStartOffset;
 
+                        // INT füllen
+                        ms.Position = intStartOffset;
                         foreach (var nameOffset in nameRvas)
                         {
-                            // RVA zum Namen = BaseRva + Offset im Stream
                             ulong rvaVal = newImportRva + nameOffset;
-                            if (is64Bit)
-                                writer.Write((ulong)rvaVal);
-                            else
-                                writer.Write((uint)rvaVal);
+                            if (is64Bit) writer.Write((ulong)rvaVal);
+                            else writer.Write((uint)rvaVal);
                         }
-                        // Null-Terminator ist schon da (durch new byte[])
+
+                        // IAT füllen (Identische Kopie der INT)
+                        ms.Position = iatStartOffset;
+                        foreach (var nameOffset in nameRvas)
+                        {
+                            ulong rvaVal = newImportRva + nameOffset;
+                            if (is64Bit) writer.Write((ulong)rvaVal);
+                            else writer.Write((uint)rvaVal);
+                        }
+
                         ms.Position = endPos;
 
-                        // 5. Descriptor Fixup vorbereiten
-                        // Wir schreiben die RVA-Werte in die Descriptor-Tabelle am Anfang
+                        // 6. Descriptor Fixup
                         int currentDescIdx = i;
                         descriptorFixups.Add((w, baseRva) =>
                         {
                             w.BaseStream.Position = descriptorsStartOffset + (currentDescIdx * descriptorSize);
 
                             // IMAGE_IMPORT_DESCRIPTOR schreiben
-                            w.Write((uint)(baseRva + intStartOffset)); // OriginalFirstThunk (RVA zu INT)
+                            w.Write((uint)(baseRva + intStartOffset)); // OriginalFirstThunk (INT)
                             w.Write((uint)0); // TimeDateStamp
                             w.Write((uint)0); // ForwarderChain
-                            w.Write((uint)(baseRva + dllNameOffset)); // Name (RVA zu DLL String)
-                            w.Write((uint)iat.FirstThunkRva); // FirstThunk (RVA zur IAT im Original-Dump!)
+                            w.Write((uint)(baseRva + dllNameOffset)); // Name
+
+                            // KORREKTUR: Wir zeigen auf unsere NEUE IAT, nicht die alte im Dump!
+                            w.Write((uint)(baseRva + iatStartOffset)); // FirstThunk (IAT)
                         });
                     }
-
                     // C. Fixups anwenden
                     foreach (var fixup in descriptorFixups)
                     {
@@ -223,8 +231,12 @@ namespace NativeProcesses.Core.Inspection
             ushort numberOfSections = BitConverter.ToUInt16(pe, fileHeaderOffset + 2);
             ushort sizeOfOptionalHeader = BitConverter.ToUInt16(pe, fileHeaderOffset + 16);
 
-            int sectionTableOffset = fileHeaderOffset + 20 + sizeOfOptionalHeader;
+            int optionalHeaderOffset = fileHeaderOffset + 20;
+            int sectionTableOffset = optionalHeaderOffset + sizeOfOptionalHeader;
             int sectionSize = 40;
+
+            // FileAlignment lesen (Offset 36 im Optional Header, gleich für 32/64 Bit)
+            uint fileAlignment = BitConverter.ToUInt32(pe, optionalHeaderOffset + 36);
 
             // Letzte Sektion finden
             int lastSectionOffset = sectionTableOffset + ((numberOfSections - 1) * sectionSize);
@@ -239,18 +251,26 @@ namespace NativeProcesses.Core.Inspection
 
             uint newVirtualSize = newVirtualEnd - virtualAddress;
 
+            // RawSize muss aligned sein!
+            uint newRawSize = AlignUp(newVirtualSize, fileAlignment);
             // Patchen
             using (var ms = new MemoryStream(pe))
             using (var w = new BinaryWriter(ms))
             {
-                ms.Position = lastSectionOffset + 8; // VirtualSize
+                // 1. VirtualSize patchen (darf unaligned sein)
+                ms.Position = lastSectionOffset + 8;
                 w.Write(newVirtualSize);
 
                 // Wir setzen auch SizeOfRawData hoch, da wir es ja physikalisch angehängt haben
                 ms.Position = lastSectionOffset + 16; // SizeOfRawData
-                w.Write(newVirtualSize); // AlignUp wäre sauberer, aber Windows ist tolerant
+                w.Write(newRawSize); // AlignUp wäre sauberer, aber Windows ist tolerant
 
-                // Optional: Characteristics auf Read/Write setzen, falls nötig
+                // 3. Characteristics auf Read/Write/Execute setzen (0xE0000020)
+                // Damit der Loader nicht meckert, wenn wir Code in die Daten-Sektion gepackt haben.
+                ms.Position = lastSectionOffset + 36;
+                uint chars = BitConverter.ToUInt32(pe, lastSectionOffset + 36);
+                chars |= 0xE0000020; // CNT_CODE | MEM_EXECUTE | MEM_READ | MEM_WRITE
+                w.Write(chars);
             }
         }
 

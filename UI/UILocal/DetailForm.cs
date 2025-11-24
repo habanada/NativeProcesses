@@ -315,6 +315,11 @@ namespace processlist
                 hasItems = true;
             }
 
+            if (_itemType == typeof(NativeProcesses.Core.Inspection.PeAnomalyInfo))
+            {
+                menu.Items.Add("Dump Object Content...", null, DumpSuspiciousMemory_Click);
+                hasItems = true;
+            }
             if (hasItems)
             {
                 gridDetails.ContextMenuStrip = menu;
@@ -375,6 +380,28 @@ namespace processlist
 
                     if (string.IsNullOrEmpty(name)) name = "Phantom";
                     suggestedFileName = $"PID_{_pid}_{name}_{baseAddress.ToString("X")}.dll";
+                }
+                // E. NEU: PeAnomalyInfo (Heuristik Funde)
+                else if (_itemType == typeof(NativeProcesses.Core.Inspection.PeAnomalyInfo))
+                {
+                    long addr = item.Address;
+                    if (addr == 0)
+                    {
+                        MessageBox.Show("This anomaly has no associated memory address to dump.");
+                        return;
+                    }
+                    baseAddress = (IntPtr)addr;
+
+                    // Wir wissen die Größe nicht genau (nur ClrMD wusste sie).
+                    // Wir setzen ein Flag, damit wir via VAD die Größe der Allocation holen.
+                    // Alternativ: Standardgröße (z.B. 64KB), da wir meist nur das Objekt wollen.
+                    regionSize = 0;
+                    forceRecalculateSize = true;
+
+                    string label = item.AnomalyType;
+                    // Dateinamen bereinigen
+                    foreach (char c in System.IO.Path.GetInvalidFileNameChars()) label = label.Replace(c, '_');
+                    suggestedFileName = $"PID_{_pid}_{label}_{baseAddress.ToString("X")}.bin";
                 }
                 // Fallback für unbekannte Typen
                 else
