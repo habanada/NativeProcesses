@@ -77,15 +77,21 @@ namespace NativeProcesses.Core.PE.Loader
                     // 1. DLL Name holen und laden
                     string dllName = Marshal.PtrToStringAnsi(IntPtr.Add(basePtr, (int)desc.Name));
                     if (string.IsNullOrEmpty(dllName)) return false;
+                    string resolvedDllName = PeApiSet.ResolveSchema(dllName);
 
-                    IntPtr hLib = LoadLibraryA(dllName);
-                    if (hLib == IntPtr.Zero)
+                    IntPtr hLib = LoadLibraryA(resolvedDllName);
+
+                    // Fallback: Wenn ApiSet Name fehlschlägt, versuche Original
+                    if (hLib == IntPtr.Zero && resolvedDllName != dllName)
                     {
-                        // DLL nicht gefunden. Abbruch oder Fehler.
-                        // Für Robustheit könnten wir versuchen weiterzumachen, aber meist crasht die Exe dann eh.
-                        return false;
+                        hLib = LoadLibraryA(dllName);
                     }
 
+                    if (hLib == IntPtr.Zero)
+                    {
+                        // Fehlerbehandlung oder return false
+                        return false;
+                    }
                     // 2. Thunks verarbeiten
                     // OriginalFirstThunk (INT) ist die Lookup Table. FirstThunk (IAT) ist das Ziel.
                     // Wenn OriginalFirstThunk 0 ist, nutzen wir FirstThunk (Bindung).
@@ -123,6 +129,7 @@ namespace NativeProcesses.Core.PE.Loader
 
             while (true)
             {
+
                 IntPtr thunkPtr = IntPtr.Add(basePtr, (int)(thunkRva + (index * ptrSize)));
                 IntPtr iatPtr = IntPtr.Add(basePtr, (int)(iatRva + (index * ptrSize)));
 

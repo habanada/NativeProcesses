@@ -25,6 +25,16 @@ namespace NativeProcesses.Core.PE.Loader
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool FlushInstructionCache(IntPtr hProcess, IntPtr lpBaseAddress, UIntPtr dwSize);
 
+        // we could use RtlInsertInvertedFunctionTable from ntdll with struct Inverted Function Table for stealth but we use RtlAddFunctionTable  to make us Visible and to have more stability!
+        //we need to make the ntdll.dll readwrite with PAGE_READWRITE this would be a massive RED FLAG and would trigger EDR, also it would mean we have to check were we run Win7, 8, 10, 11 this 
+        //strucktures change a lot its easier and safer not to do it - we coudl but we let it go...
+        // we need RTL_INVERTED_FUNCTION_TABLE  we have LDR_DATA_TABLE_ENTRY 
+        [DllImport("kernel32.dll")]
+        static extern bool RtlAddFunctionTable(IntPtr FunctionTable, uint EntryCount, ulong BaseAddress);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool RtlDeleteFunctionTable(IntPtr FunctionTable);
+
         private const uint MEM_COMMIT = 0x1000;
         private const uint MEM_RESERVE = 0x2000;
         private const uint MEM_RELEASE = 0x8000;
@@ -38,6 +48,8 @@ namespace NativeProcesses.Core.PE.Loader
         private IntPtr _loadedImageBase = IntPtr.Zero;
         private UIntPtr _imageSize = UIntPtr.Zero;
         private bool _isDisposed = false;
+        private IntPtr _pExceptionTable = IntPtr.Zero;
+        private IntPtr _pebEntry = IntPtr.Zero;
 
         /// <summary>
         /// Gibt die Basisadresse des geladenen Moduls zurück (falls geladen).
@@ -50,7 +62,7 @@ namespace NativeProcesses.Core.PE.Loader
         /// </summary>
         /// <param name="rawPe">Das Byte-Array der rohen PE-Datei (z.B. File.ReadAllBytes).</param>
         /// <returns>True bei Erfolg, sonst wird eine Exception geworfen.</returns>
-        public bool Load(byte[] rawPe)
+        public bool Load(byte[] rawPe, string fakeDllName = "module.dll")
         {
             if (rawPe == null || rawPe.Length == 0)
                 throw new ArgumentNullException(nameof(rawPe), "PE buffer is empty.");
@@ -112,7 +124,18 @@ namespace NativeProcesses.Core.PE.Loader
                 // ---------------------------------------------------------
                 // Jetzt, wo das Byte-Array gepatcht ist, schieben wir es in den ausführbaren Speicher.
                 Marshal.Copy(virtualPe, 0, _loadedImageBase, virtualPe.Length);
+                // NEU: SCHRITT 5b - Exceptions
+                if (!EnableExceptions(virtualPe))
+                {
+                    // Optional: Log warning. Ist nicht kritisch für Programmstart, aber für Stabilität.
+                    // System.Diagnostics.Debug.WriteLine("SEH Registration failed or not needed.");
+                }
+                // NEU: SCHRITT 5c - PEB Linking (Make Visible)
+                // ---------------------------------------------------------
+                // Wir gaukeln Windows vor, dass diese DLL wirklich geladen ist.
+                // Das erlaubt GetModuleHandle(fakeDllName) und API Calls, die das Modul suchen.
 
+                _pebEntry = PePebLinker.LinkModuleToPeb(_loadedImageBase, (uint)_imageSize, "C:\\Windows\\System32\\" + fakeDllName);
                 // ---------------------------------------------------------
                 // SCHRITT 6: Security Cookie (Load Config)
                 // ---------------------------------------------------------
@@ -135,7 +158,7 @@ namespace NativeProcesses.Core.PE.Loader
                 {
                     throw new Exception("Failed to execute TLS callbacks. The payload might have crashed during initialization.");
                 }
-
+            
                 // ---------------------------------------------------------
                 // SCHRITT 8: Finalisierung
                 // ---------------------------------------------------------
@@ -151,7 +174,48 @@ namespace NativeProcesses.Core.PE.Loader
                 throw;
             }
         }
+        // ---------------------------------------------------------
+        // Hilfsmethode für Exception Support
+        // ---------------------------------------------------------
+        private bool EnableExceptions(byte[] virtualPe)
+        {
+            try
+            {
+                // Wir nutzen deine PeLoader Logik, um Headers zu checken
+                if (!PeLoader.GetImageBase(virtualPe, out _, out bool is64Bit))
+                    return false;
 
+                // SEH via RtlAddFunctionTable gibt es nur auf x64 (auf x86 läuft das über den Stack/FS Register)
+                if (!is64Bit) return true;
+
+                // Header lesen um Directory zu finden
+                int e_lfanew = BitConverter.ToInt32(virtualPe, 0x3C);
+                int optHeaderOffset = e_lfanew + 24;
+
+                // Auf x64 ist DataDirectory bei Offset 112 im Optional Header
+                // Directory Index 3 ist IMAGE_DIRECTORY_ENTRY_EXCEPTION
+                int exceptionDirOffset = optHeaderOffset + 112 + (3 * 8); // 3 * sizeof(IMAGE_DATA_DIRECTORY)
+
+                uint exceptionRva = BitConverter.ToUInt32(virtualPe, exceptionDirOffset);
+                uint exceptionSize = BitConverter.ToUInt32(virtualPe, exceptionDirOffset + 4);
+
+                if (exceptionRva == 0 || exceptionSize == 0) return true; // Keine Exceptions in der DLL
+
+                // Pointer zur Tabelle im allozieren Speicher berechnen
+                _pExceptionTable = IntPtr.Add(_loadedImageBase, (int)exceptionRva);
+
+                // Anzahl der Einträge berechnen (Size / sizeof(RUNTIME_FUNCTION))
+                // RUNTIME_FUNCTION ist 12 Bytes groß (3 * uint)
+                uint entryCount = exceptionSize / 12;
+
+                // Registrieren bei Windows
+                return RtlAddFunctionTable(_pExceptionTable, entryCount, (ulong)_loadedImageBase.ToInt64());
+            }
+            catch
+            {
+                return false;
+            }
+        }
         /// <summary>
         /// Führt den EntryPoint der geladenen PE aus.
         /// </summary>
@@ -238,6 +302,12 @@ namespace NativeProcesses.Core.PE.Loader
         {
             if (_loadedImageBase != IntPtr.Zero)
             {
+                // Erst aus dem PEB entfernen!
+                if (_pebEntry != IntPtr.Zero)
+                {
+                    PePebLinker.UnlinkModuleFromPeb(_pebEntry);
+                    _pebEntry = IntPtr.Zero;
+                }
                 // MEM_RELEASE (0x8000) gibt den Speicher komplett an das OS zurück.
                 // dwSize muss 0 sein bei MEM_RELEASE.
                 VirtualFree(_loadedImageBase, UIntPtr.Zero, MEM_RELEASE);

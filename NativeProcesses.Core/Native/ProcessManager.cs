@@ -254,6 +254,24 @@ namespace NativeProcesses.Core.Native
 
                     try
                     {
+                        // --- NEU: Win11 24H2 Hotpatching deaktivieren (für Stabilität) ---
+                        // Wir brauchen temporär ein Handle mit VM_WRITE/VM_OPERATION Rechten
+                        try
+                        {
+                            var patchAccess = ProcessAccessFlags.VmRead | ProcessAccessFlags.VmWrite | ProcessAccessFlags.VmOperation | ProcessAccessFlags.QueryInformation;
+                            using (var patchProc = new ManagedProcess(pid, patchAccess))
+                            {
+                                if (NtdllPatcher.PatchNtManageHotPatch(patchProc))
+                                {
+                                    logger?.Log(LogLevel.Info, $"Disabled Hotpatching support in PID {pid} (Win11 24H2 fix applied).");
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Nicht kritisch, wenn es fehlschlägt (z.B. fehlende Rechte oder altes Windows)
+                             logger?.Log(LogLevel.Debug, "Hotpatch fix failed or not needed.", ex);
+                        }
                         // 1. Versuch: PSS Snapshot (Stealth & Konsistenz)
                         try
                         {

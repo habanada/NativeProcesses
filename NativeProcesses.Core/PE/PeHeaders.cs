@@ -275,6 +275,47 @@ namespace NativeProcesses.Core.PE
             public uint CodePage;
             public uint Reserved;
         }
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        public struct RUNTIME_FUNCTION
+        {
+            public uint BeginAddress;
+            public uint EndAddress;
+            public uint UnwindData;
+        }
+        // NativeProcesses.Core.PE\PeHeaders.cs
+        // ... vorhandener Code ...
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct UNICODE_STRING
+        {
+            public ushort Length;
+            public ushort MaximumLength;
+            public IntPtr Buffer;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct LIST_ENTRY
+        {
+            public IntPtr Flink; // Forward Link
+            public IntPtr Blink; // Backward Link
+        }
+
+        // Wir definieren eine vereinfachte LDR_DATA_TABLE_ENTRY. 
+        // Die volle Struktur ist riesig und ändert sich je nach Windows-Version, 
+        // aber der Anfang (die Listen und Basis-Daten) ist stabil.
+        [StructLayout(LayoutKind.Sequential)]
+        public struct LDR_DATA_TABLE_ENTRY_PARTIAL
+        {
+            public LIST_ENTRY InLoadOrderLinks;
+            public LIST_ENTRY InMemoryOrderLinks;
+            public LIST_ENTRY InInitializationOrderLinks;
+            public IntPtr DllBase;
+            public IntPtr EntryPoint;
+            public uint SizeOfImage;
+            public UNICODE_STRING FullDllName;
+            public UNICODE_STRING BaseDllName;
+            // Der Rest interessiert uns für das Linking nicht zwingend
+        }
 
         public const int IMAGE_DIRECTORY_ENTRY_EXPORT = 0;
         public const int IMAGE_DIRECTORY_ENTRY_IMPORT = 1;

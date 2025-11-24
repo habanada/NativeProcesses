@@ -272,6 +272,7 @@
     <Compile Include="Native\NativeDefinitions.cs" />
     <Compile Include="Native\NativeHandleLister.cs" />
     <Compile Include="Native\NetworkManager.cs" />
+    <Compile Include="Native\NtdllPatcher.cs" />
     <Compile Include="Native\NtProcessInfoStructs.cs" />
     <Compile Include="Native\PebModuleEnumerator.cs" />
     <Compile Include="Native\ProcessSnapshot.cs" />
@@ -287,10 +288,12 @@
     <Compile Include="PeConv\PeImports.cs" />
     <Compile Include="PeConv\PeMapper.cs" />
     <Compile Include="PE\Export\PeExports.cs" />
+    <Compile Include="PE\Loader\ApiSetMap.cs" />
     <Compile Include="PE\Loader\ImportsFixer.cs" />
     <Compile Include="PE\Loader\PeConfig.cs" />
     <Compile Include="PE\Loader\PeExecutor.cs" />
     <Compile Include="PE\Loader\PeLoader.cs" />
+    <Compile Include="PE\Loader\PePebLinker.cs" />
     <Compile Include="PE\Loader\PeTls.cs" />
     <Compile Include="PE\Loader\ProcessHollower.cs" />
     <Compile Include="PE\Loader\RelocationsFixer.cs" />
