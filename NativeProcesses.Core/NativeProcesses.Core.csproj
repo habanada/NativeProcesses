@@ -313,6 +313,7 @@
     <Compile Include="Native\PssDefines.cs" />
     <Compile Include="Native\SnapshotDumper.cs" />
     <Compile Include="Native\StackWalker.cs" />
+    <Compile Include="Native\SymbolResolver.cs" />
     <Compile Include="Native\User32.cs" />
     <Compile Include="Native\WindowManager.cs" />
     <Compile Include="Inspection\PeStructs_deleted.cs" />

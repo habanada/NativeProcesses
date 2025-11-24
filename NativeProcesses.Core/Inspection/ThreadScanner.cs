@@ -35,18 +35,29 @@ namespace NativeProcesses.Core.Inspection
             var results = new List<ThreadScanReport>();
             var threads = GetThreadsForProcess(process.Pid);
 
-            foreach (var tid in threads)
+            // HIER IST DIE INTEGRATION:
+            // Wir erstellen den Resolver EINMAL für den ganzen Scan, das ist performant.
+            // Wir nutzen 'using', damit SymCleanup am Ende automatisch aufgerufen wird.
+            using (var resolver = new SymbolResolver(process.Handle))
             {
-                var report = ScanSingleThread(process, tid, modules, regions);
-                if (report.Status != ThreadScanStatus.Clean)
+                foreach (var tid in threads)
                 {
-                    results.Add(report);
+                    // Wir geben den resolver an die Methode weiter
+                    var report = ScanSingleThread(process, tid, modules, regions, resolver);
+
+                    // Wir speichern alle Reports, auch die sauberen, wenn ein Symbol gefunden wurde
+                    // oder filtern nur die verdächtigen (wie vorher).
+                    // Hier behalten wir deine Logik bei: Nur Status != Clean.
+                    if (report.Status != ThreadScanStatus.Clean)
+                    {
+                        results.Add(report);
+                    }
                 }
             }
             return results;
         }
 
-        private ThreadScanReport ScanSingleThread(ManagedProcess process, int tid, List<ProcessModuleInfo> modules, List<VirtualMemoryRegion> regions)
+        private ThreadScanReport ScanSingleThread(ManagedProcess process, int tid, List<ProcessModuleInfo> modules, List<VirtualMemoryRegion> regions, SymbolResolver resolver)
         {
             var report = new ThreadScanReport { ThreadId = tid };
 
@@ -63,6 +74,16 @@ namespace NativeProcesses.Core.Inspection
                     // A. Startadresse holen
                     IntPtr startAddress = GetThreadStartAddress(thread.Handle);
                     report.StartAddress = startAddress;
+
+                    // Symbol auflösen 
+                    if (startAddress != IntPtr.Zero)
+                    {
+                        string symbol = resolver.ResolveAddress(startAddress);
+                        if (!string.IsNullOrEmpty(symbol))
+                        {
+                            report.StartAddressSymbol = symbol;
+                        }
+                    }
 
                     // B. Startadresse analysieren
                     var region = FindRegion(regions, startAddress);
@@ -96,6 +117,9 @@ namespace NativeProcesses.Core.Inspection
                     // D. Stack Analysis (Heuristic)
                     var ctx = new CONTEXT();
                     ctx.ContextFlags = CONTEXT_CONTROL;
+                    
+                    // Thread kurz anhalten für stabilen Context (Optional, aber sicherer)
+                    // thread.Suspend();
 
                     if (GetThreadContext(thread.Handle, ref ctx))
                     {
@@ -157,6 +181,12 @@ namespace NativeProcesses.Core.Inspection
                                             // Wir brechen nach dem ersten Fund ab, da ein Shellcode-Frame reicht
                                             break;
                                         }
+                                    }
+                                    else
+                                    {
+                                        // Optional: Symbole für Stack Trace auflösen (nur für Debugging, frisst Performance)
+                                        // string sym = resolver.ResolveAddress((IntPtr)ptrVal);
+                                        // if (sym != null) report.StackTrace.Add(sym);
                                     }
                                 }
                             }

@@ -401,11 +401,14 @@ namespace NativeProcesses.Core.Native
             public ulong R15;
             public ulong Rip;
 
-            // ... FPU / XMM registers (vereinfacht: wir brauchen nur bis RIP/RSP für den Scan)
-            // Um Speicherfehler zu vermeiden, reservieren wir hier genug Platz für den Rest.
-            // CONTEXT ist 1232 Bytes auf x64. Bis RIP sind es 248 Bytes (0xF8).
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 512)]
-            public byte[] Extension;
+            // Standard Header Header (0xF8) + XMM (0x200 / 512 bytes) + Vector (ca. 0x1D8)
+            // Gesamtgröße ist 0x4D0 (1232 bytes).
+            // Die bisherigen Felder belegen 0xF8 (248) Bytes.
+            // Wir brauchen also noch mindestens 984 Bytes.
+            // Wir nehmen 1024 Bytes als Puffer, um Alignment und Padding sicher abzudecken.
+            // Das verhindert Heap Corruption durch GetThreadContext.
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1024)]
+            public byte[] ExtendedRegisters;
         }
 
         // 1. ADDRESS_MODE Enum (wird von ADDRESS64 benötigt)

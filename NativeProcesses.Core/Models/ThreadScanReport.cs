@@ -17,6 +17,7 @@ namespace NativeProcesses.Core.Models
         public int ThreadId { get; set; }
         public ThreadScanStatus Status { get; set; } = ThreadScanStatus.Clean;
         public IntPtr StartAddress { get; set; }
+        public string StartAddressSymbol { get; set; }
         public string StartAddressModule { get; set; } // "kernel32.dll" oder "Unbacked"
         public List<string> StackTrace { get; set; } = new List<string>();
         public string Details { get; set; }

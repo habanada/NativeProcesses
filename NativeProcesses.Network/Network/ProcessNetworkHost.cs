@@ -135,6 +135,10 @@ namespace NativeProcesses.Network
                         int tid = JsonConvert.DeserializeObject<int>(data);
                         HandleGetThreadPrioritiesAsync(ssl, tid);
                         break;
+                    case "scan_process":
+                        int pidScan = JsonConvert.DeserializeObject<int>(data);
+                        HandleScanProcessAsync(ssl, pidScan);
+                        break;
                 }
             }
             catch
@@ -151,6 +155,25 @@ namespace NativeProcesses.Network
             catch (Exception)
             {
                 await _server.SendMessageAsync(ssl, "thread_priorities_error", $"Failed to get priorities for TID {threadId}.");
+            }
+        }
+        private async void HandleScanProcessAsync(SslStream ssl, int pid)
+        {
+            try
+            {
+                var procInfo = _service.GetCurrentProcesses().FirstOrDefault(p => p.Pid == pid);
+                if (procInfo == null)
+                {
+                    await _server.SendMessageAsync(ssl, "scan_error", $"Process {pid} not found on server.");
+                    return;
+                }
+
+                var result = await ProcessManager.ScanProcessForHooksAsync(procInfo, ScanFlags.All);
+                await _server.SendMessageAsync(ssl, "scan_result", result);
+            }
+            catch (Exception ex)
+            {
+                await _server.SendMessageAsync(ssl, "scan_error", $"Server-side scan failed: {ex.Message}");
             }
         }
         public void ShutdownServer()
