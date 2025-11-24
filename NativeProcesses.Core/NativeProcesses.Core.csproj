@@ -212,6 +212,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Demo\DebugPrivilege.cs" />
     <Compile Include="Demo\RunRemoteInjectionDemo.cs" />
     <Compile Include="Engine\ProcessMetric.cs" />
     <Compile Include="Engine\ProcessMetricChangeEventArgs.cs" />

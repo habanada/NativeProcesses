@@ -386,6 +386,188 @@ namespace NativeProcesses.Core.Engine
             {
             }
         }
+        //private void LoadSlowDetails(FullProcessInfo info)
+        //{
+        //    if (info.IsLoadingDetails || info.IsDetailsLoaded)
+        //    {
+        //        return;
+        //    }
+        //    info.IsLoadingDetails = true;
+
+        //    var accessFull = ProcessAccessFlags.QueryInformation |
+        //                     ProcessAccessFlags.VmRead |
+        //                     ProcessAccessFlags.QueryLimitedInformation;
+
+        //    var accessLimited = ProcessAccessFlags.QueryLimitedInformation;
+        //    ManagedProcess proc = null;
+
+        //    try
+        //    {
+        //        try
+        //        {
+        //            // Versuch 1: Voller Zugriff
+        //            // FIX: Cast (IntPtr) entfernt, da ManagedProcess(int, ProcessAccessFlags) erwartet wird
+        //            proc = new ManagedProcess(info.Pid, accessFull);
+        //        }
+        //        catch (Win32Exception)
+        //        {
+        //            // Versuch 2: Fallback auf Limited Information
+        //            proc = new ManagedProcess(info.Pid, accessLimited);
+        //        }
+
+        //        using (proc)
+        //        {
+        //            if (this.DetailOptions.LoadExePathAndCommandLine)
+        //            {
+        //                try { info.ExePath = proc.GetExePath(); }
+        //                catch (Win32Exception) { info.ExePath = "Access Denied"; }
+        //                catch (Exception ex)
+        //                {
+        //                    info.ExePath = "Access Denied";
+        //                    _logger?.Log(LogLevel.Debug, $"Failed to get ExePath for PID {info.Pid}.", ex);
+        //                }
+        //                try { info.CommandLine = proc.GetCommandLine(); }
+        //                catch (Win32Exception) { info.CommandLine = "Access Denied"; }
+        //                catch (Exception ex)
+        //                {
+        //                    info.CommandLine = "Access Denied";
+        //                    _logger?.Log(LogLevel.Debug, $"Failed to get CommandLine for PID {info.Pid}.", ex);
+        //                }
+        //            }
+
+        //            if (this.DetailOptions.LoadIoCounters)
+        //            {
+        //                try { info.IoCounters = proc.GetIoCounters(); }
+        //                catch (Win32Exception) { }
+        //                catch (Exception ex) { _logger?.Log(LogLevel.Debug, $"Failed to get IoCounters for PID {info.Pid}.", ex); }
+        //            }
+
+        //            if (this.DetailOptions.LoadSecurityInfo)
+        //            {
+        //                try { info.SecurityInfo = proc.GetSecurityInfo(); }
+        //                catch (Win32Exception) { }
+        //                catch (Exception ex) { _logger?.Log(LogLevel.Debug, $"Failed to get SecurityInfo for PID {info.Pid}.", ex); }
+        //            }
+
+        //            if (this.DetailOptions.LoadMitigationInfo)
+        //            {
+        //                try { info.MitigationInfo = proc.GetMitigationInfo(); }
+        //                catch (Win32Exception) { }
+        //                catch (Exception ex) { _logger?.Log(LogLevel.Debug, $"Failed to get MitigationInfo for PID {info.Pid}.", ex); }
+        //            }
+
+        //            if (this.DetailOptions.LoadExtendedStatusFlags)
+        //            {
+        //                try
+        //                {
+        //                    proc.GetExtendedStatusFlags(out bool isDebuggerAttached, out bool isInJob, out bool isEcoMode);
+        //                    info.IsDebuggerAttached = isDebuggerAttached;
+        //                    info.IsInJob = isInJob;
+        //                    info.IsEcoMode = isEcoMode;
+        //                }
+        //                catch (Win32Exception) { }
+        //                catch (Exception ex) { _logger?.Log(LogLevel.Debug, $"Failed to get ExtendedStatusFlags for PID {info.Pid}.", ex); }
+        //            }
+
+        //            if (this.DetailOptions.LoadDpiAndUIContext)
+        //            {
+        //                try
+        //                {
+        //                    proc.GetDpiAndUIContextInfo(out string dpi, out bool immersive);
+        //                    info.DpiAwareness = dpi;
+        //                    info.IsImmersive = immersive;
+        //                }
+        //                catch (Win32Exception) { }
+        //                catch (Exception ex) { _logger?.Log(LogLevel.Debug, $"Failed to get DpiAndUIContext for PID {info.Pid}.", ex); }
+        //            }
+
+        //            if (this.DetailOptions.LoadPackageInfo)
+        //            {
+        //                try { info.PackageFullName = proc.GetPackageFullName(); }
+        //                catch (Win32Exception ex)
+        //                {
+        //                    if (ex.NativeErrorCode == ManagedProcess.APPMODEL_ERROR_NO_PACKAGE) info.PackageFullName = "N/A";
+        //                    else info.PackageFullName = "Error";
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    info.PackageFullName = "Error";
+        //                    _logger?.Log(LogLevel.Debug, $"Failed to get PackageFullName for PID {info.Pid}.", ex);
+        //                }
+        //                if (info.PackageFullName == null) info.PackageFullName = "N/A";
+        //            }
+
+        //            if (this.DetailOptions.DetectDotNet)
+        //            {
+        //                try
+        //                {
+        //                    // Modul-Enumeration schlägt bei Limited Access oft fehl, daher extra try-catch
+        //                    var modules = proc.GetLoadedModules(_logger);
+        //                    bool framework = false;
+        //                    bool core = false;
+        //                    foreach (var mod in modules)
+        //                    {
+        //                        if (mod.BaseDllName.Equals("clr.dll", StringComparison.OrdinalIgnoreCase)) framework = true;
+        //                        else if (mod.BaseDllName.Equals("coreclr.dll", StringComparison.OrdinalIgnoreCase)) core = true;
+        //                    }
+        //                    if (framework && core) info.DotNetVersion = "Hybrid";
+        //                    else if (framework) info.DotNetVersion = "Framework";
+        //                    else if (core) info.DotNetVersion = "Core";
+        //                    else info.DotNetVersion = "N/A";
+        //                }
+        //                catch (Win32Exception) { info.DotNetVersion = "N/A"; }
+        //                catch (Exception ex)
+        //                {
+        //                    info.DotNetVersion = "Error";
+        //                    _logger?.Log(LogLevel.Debug, $"Failed to detect .NET version for PID {info.Pid}.", ex);
+        //                }
+        //            }
+        //        }
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        // Totaler Fehlschlag (Zugriff komplett verweigert)
+        //        info.ExePath = "Access Denied";
+        //        info.CommandLine = "Access Denied";
+        //        info.SecurityInfo.UserName = "Access Denied";
+        //        // _logger?.Log(LogLevel.Debug, $"Could not open PID {info.Pid} even with limited rights.", ex);
+        //    }
+
+        //    // Signatur Check (benötigt ExePath, kein Prozess-Handle)
+        //    if (!string.IsNullOrEmpty(info.ExePath) && !info.ExePath.StartsWith("Access Denied") && !info.ExePath.StartsWith("["))
+        //    {
+        //        if (this.DetailOptions.LoadSignatureInfo)
+        //        {
+        //            try { info.SignatureInfo = SignatureVerifier.Verify(info.ExePath); }
+        //            catch (Exception ex)
+        //            {
+        //                info.SignatureInfo.ErrorMessage = ex.Message;
+        //                _logger?.Log(LogLevel.Debug, $"Failed to verify signature for {info.ExePath}.", ex);
+        //            }
+        //        }
+
+        //        if (this.DetailOptions.LoadFileVersionInfo)
+        //        {
+        //            try
+        //            {
+        //                var versionInfo = FileVersionInfo.GetVersionInfo(info.ExePath);
+        //                info.FileCompany = string.IsNullOrEmpty(versionInfo.CompanyName) ? "N/A" : versionInfo.CompanyName;
+        //                info.FileDescription = string.IsNullOrEmpty(versionInfo.FileDescription) ? "N/A" : versionInfo.FileDescription;
+        //                info.FileVersion = string.IsNullOrEmpty(versionInfo.FileVersion) ? "N/A" : versionInfo.FileVersion;
+        //            }
+        //            catch (Exception ex)
+        //            {
+        //                info.FileCompany = "N/A";
+        //                info.FileDescription = ex.Message;
+        //                info.FileVersion = "N/A";
+        //            }
+        //        }
+        //    }
+
+        //    info.IsLoadingDetails = false;
+        //    info.IsDetailsLoaded = true;
+        //    ProcessUpdated?.Invoke(info.CreateSnapshot());
+        //}
         private void LoadSlowDetails(FullProcessInfo info)
         {
             if (info.IsLoadingDetails || info.IsDetailsLoaded)
@@ -393,12 +575,29 @@ namespace NativeProcesses.Core.Engine
                 return;
             }
             info.IsLoadingDetails = true;
-            try
-            {
-                var access = ProcessAccessFlags.QueryInformation |
+
+            var accessFull = ProcessAccessFlags.QueryInformation |
                              ProcessAccessFlags.VmRead |
                              ProcessAccessFlags.QueryLimitedInformation;
-                using (var proc = new ManagedProcess(info.Pid, access))
+
+            var accessLimited = ProcessAccessFlags.QueryLimitedInformation;
+            ManagedProcess proc = null;
+
+            try
+            {
+                try
+                {
+                    // Versuch 1: Voller Zugriff
+                    // FIX: Cast (IntPtr) entfernt, da ManagedProcess(int, ProcessAccessFlags) erwartet wird
+                    proc = new ManagedProcess(info.Pid, accessFull);
+                }
+                catch (Win32Exception)
+                {
+                    // Versuch 2: Fallback auf Limited Information
+                    proc = new ManagedProcess(info.Pid, accessLimited);
+                }
+
+                using (proc)
                 {
                     if (this.DetailOptions.LoadExePathAndCommandLine)
                     {
@@ -438,12 +637,8 @@ namespace NativeProcesses.Core.Engine
                     if (this.DetailOptions.LoadSecurityInfo)
                     {
                         try { info.SecurityInfo = proc.GetSecurityInfo(); }
-                        catch (Win32Exception ex)
-                        { } //denoise
-                        catch (Exception ex)
-                        {
-                            _logger?.Log(LogLevel.Debug, $"Failed to get SecurityInfo for PID {info.Pid}.", ex);
-                        }
+                        catch (Win32Exception) { }
+                        catch (Exception ex) { _logger?.Log(LogLevel.Debug, $"Failed to get SecurityInfo for PID {info.Pid}.", ex); }
                     }
 
                     if (this.DetailOptions.LoadMitigationInfo)
@@ -553,13 +748,14 @@ namespace NativeProcesses.Core.Engine
             }
             catch (Win32Exception ex)
             {
+                // Totaler Fehlschlag (Zugriff komplett verweigert)
                 info.ExePath = ex.Message;
                 info.CommandLine = ex.Message;
                 info.SecurityInfo.UserName = ex.Message;
                 //denoise
                 //    _logger?.Log(LogLevel.Debug, $"Failed to open PID {info.Pid} for details.", ex);
             }
-
+            // Signatur Check (benötigt ExePath, kein Prozess-Handle)
             if (info.ExePath.StartsWith("Access Denied") || info.ExePath.StartsWith("["))
             {
                 info.FileCompany = "N/A";

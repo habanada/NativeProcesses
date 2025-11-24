@@ -39,7 +39,7 @@ namespace ProcessDemo
 
         private Button btnNetwork;
         private int _lastSelectedPid = -1;
-
+       
         public MainForm()
         {
             InitializeComponent();
@@ -48,7 +48,7 @@ namespace ProcessDemo
             this.KeyPreview = true;
             this.KeyDown += new KeyEventHandler(this.MainForm_KeyDown);
             SetupFilterBar();
-
+            DebugPrivilege.Enable();//WICHTIG um Uername etc zu lesen
             SetupGrid();
             SetupThreadGrid();
             InitializeScanFlagsComboBox();
@@ -1740,7 +1740,7 @@ namespace ProcessDemo
 
         private void button1_Click(object sender, EventArgs e)
         {
-            PayloadRunner.RunRemoteInjectionDemo();
+        //    PayloadRunner.RunRemoteInjectionDemo();
             //string targetPath = @"C:\Windows\System32\calc.exe";
             //byte[] payloadBytes = File.ReadAllBytes(targetPath);
             //using (var loader = new PeExecutor())

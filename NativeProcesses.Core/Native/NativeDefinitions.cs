@@ -10,7 +10,35 @@ namespace NativeProcesses.Core.Native
 {
     public static class NativeDefinitions
     {
-        public static class NtStatus
+        // In NativeProcesses.Core\Native\NativeDefinitions.cs oder lokal
+
+    public const int SE_PRIVILEGE_ENABLED = 0x00000002;
+    public const int TOKEN_ADJUST_PRIVILEGES = 0x00000020;
+    public const int TOKEN_QUERY = 0x00000008;
+    public const int ERROR_NOT_ALL_ASSIGNED = 1300;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LUID
+    {
+        public uint LowPart;
+        public int HighPart;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct LUID_AND_ATTRIBUTES
+    {
+        public LUID Luid;
+        public uint Attributes;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct TOKEN_PRIVILEGES
+    {
+        public int PrivilegeCount;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1)]
+        public LUID_AND_ATTRIBUTES[] Privileges;
+    }
+    public static class NtStatus
         {
             public const uint STATUS_SUCCESS = 0x00000000;
             public const uint STATUS_INFO_LENGTH_MISMATCH = 0xC0000004;

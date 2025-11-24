@@ -17,6 +17,7 @@ namespace NativeProcesses.Core.Native
 {
     public class ManagedProcess : IDisposable
     {
+
         public int Pid { get; private set; }
         public IntPtr Handle { get; private set; }
 
@@ -50,6 +51,25 @@ namespace NativeProcesses.Core.Native
                 this.Handle = IntPtr.Zero;
             }
         }
+        // In NativeProcesses.Core\Native\ManagedProcess.cs (oder NativeMethods)
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        public static extern bool LookupPrivilegeValue(
+            string lpSystemName,
+            string lpName,
+            out LUID lpLuid);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        public static extern bool AdjustTokenPrivileges(
+            IntPtr TokenHandle,
+            bool DisableAllPrivileges,
+            ref TOKEN_PRIVILEGES NewState,
+            int BufferLength,
+            IntPtr PreviousState,
+            IntPtr ReturnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr GetCurrentProcess();
 
         #region P/Invoke Kernel32
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -106,7 +126,7 @@ namespace NativeProcesses.Core.Native
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool OpenProcessToken(IntPtr ProcessHandle,
+        public static extern bool OpenProcessToken(IntPtr ProcessHandle,
             TokenAccessFlags DesiredAccess, out IntPtr TokenHandle);
 
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -310,7 +330,7 @@ namespace NativeProcesses.Core.Native
         }
 
         [Flags]
-        private enum TokenAccessFlags : uint
+        public enum TokenAccessFlags : uint
         {
             Query = 0x0008,
         }
@@ -1054,6 +1074,7 @@ namespace NativeProcesses.Core.Native
             }
             return isWow64;
         }
+        // In NativeProcesses.Core\Native\ManagedProcess.cs
 
         public ProcessSecurityInfo GetSecurityInfo()
         {
@@ -1064,11 +1085,31 @@ namespace NativeProcesses.Core.Native
             }
             catch { }
 
+            IntPtr tokenHandle = IntPtr.Zero;
+            bool tokenOpened = false;
+
             try
             {
-                if (!OpenProcessToken(this.Handle, TokenAccessFlags.Query, out IntPtr tokenHandle))
+                // Versuch 1: Mit bestehendem Handle
+                tokenOpened = OpenProcessToken(this.Handle, TokenAccessFlags.Query, out tokenHandle);
+
+                // Versuch 2: Fallback auf Limited Handle (für Systemprozesse)
+                if (!tokenOpened)
                 {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed.");
+                    // 0x1000 = PROCESS_QUERY_LIMITED_INFORMATION
+                    IntPtr hLimited = OpenProcess(ProcessAccessFlags.QueryLimitedInformation, false, this.Pid);
+                    if (hLimited != IntPtr.Zero)
+                    {
+                        tokenOpened = OpenProcessToken(hLimited, TokenAccessFlags.Query, out tokenHandle);
+                        CloseHandle(hLimited);
+                    }
+                }
+
+                if (!tokenOpened)
+                {
+                    info.UserName = "Access Denied";
+                    info.IntegrityLevel = "Access Denied";
+                    return info;
                 }
 
                 try
@@ -1089,7 +1130,41 @@ namespace NativeProcesses.Core.Native
                 info.IntegrityLevel = "Access Denied";
             }
             return info;
-        }
+        }        //public ProcessSecurityInfo GetSecurityInfo()
+        //{
+        //    var info = new ProcessSecurityInfo();
+        //    try
+        //    {
+        //        info.IsWow64 = GetIsWow64();
+        //    }
+        //    catch { }
+
+        //    try
+        //    {
+        //        if (!OpenProcessToken(this.Handle, TokenAccessFlags.Query, out IntPtr tokenHandle))
+        //        {
+        //            throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed.");
+        //        }
+
+        //        try
+        //        {
+        //            info.UserName = GetTokenUser(tokenHandle);
+        //            info.IntegrityLevel = GetTokenIntegrityLevel(tokenHandle);
+        //            info.IsElevated = GetTokenIsElevated(tokenHandle);
+        //            info.IsAppContainer = GetTokenIsAppContainer(tokenHandle);
+        //        }
+        //        finally
+        //        {
+        //            CloseHandle(tokenHandle);
+        //        }
+        //    }
+        //    catch (Win32Exception)
+        //    {
+        //        info.UserName = "Access Denied";
+        //        info.IntegrityLevel = "Access Denied";
+        //    }
+        //    return info;
+        //}
 
         private string GetTokenUser(IntPtr tokenHandle)
         {
