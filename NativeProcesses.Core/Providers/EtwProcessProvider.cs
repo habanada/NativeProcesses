@@ -19,6 +19,7 @@ using Microsoft.Diagnostics.Tracing;
 using NativeProcesses.Core.Inspection;
 using static NativeProcesses.Core.Native.ManagedProcess;
 using System.Runtime.InteropServices;
+using Microsoft.Diagnostics.Tracing.Parsers.Clr;
 
 namespace NativeProcesses.Core.Providers
 {
@@ -30,6 +31,7 @@ namespace NativeProcesses.Core.Providers
         private Task _listenTask;
         private Timer _flushTimer;
         private int _intervalMs = 1000;
+        public ProcessHistory History { get; set; } = new ProcessHistory();
         private readonly ConcurrentDictionary<int, IoUsageData> _usageData = new ConcurrentDictionary<int, IoUsageData>();
         public event Action<ThreatIntelInfo> ThreatDetected;
         public event Action<NativeHeapAllocationInfo> HeapEventDetected;
@@ -201,11 +203,30 @@ namespace NativeProcesses.Core.Providers
                                        KernelTraceEventParser.Keywords.DiskIO |
                                        KernelTraceEventParser.Keywords.NetworkTCPIP |
                                        KernelTraceEventParser.Keywords.MemoryHardFaults |
-                                  //     KernelTraceEventParser.Keywords.VirtualAlloc | //todo this is not efficient => DISABLED
+                                       KernelTraceEventParser.Keywords.VirtualAlloc | //todo this is not efficient => DISABLED
+                                       KernelTraceEventParser.Keywords.ImageLoad | // WICHTIG
                                        KernelTraceEventParser.Keywords.Profile
                                        ;
 
                         _session.EnableKernelProvider(keywords);
+
+                        var clrParser = new ClrTraceEventParser(_session.Source);
+                        clrParser.MethodJittingStarted += OnJitStarted;
+                        _session.EnableProvider(
+                            ClrTraceEventParser.ProviderGuid,
+                            TraceEventLevel.Informational,
+                            (ulong)(ClrTraceEventParser.Keywords.Jit | ClrTraceEventParser.Keywords.Interop)
+                        );
+
+                        //_session.EnableProvider(
+                        //    Guid.Parse("E13C0D23-CCBC-4E12-931B-D9CC2EEE27E4"),
+                        //    TraceEventLevel.Informational,
+                        //    (ulong)(0x10 | 0x2000) // JIT | Interop
+                        //);
+                        // Handler registrieren (NEU)
+                        _session.Source.Clr.MethodJittingStarted += OnJitStarted;
+                       // _session.Source.Clr.RuntimeStart += OnClrStart; // Optional
+
                         // ATTENTION: This specific ETW provider is often restricted by Windows
                         // or already exclusively acquired by high-privilege EDR/Anti-Malware
                         // solutions (like Sophos, Defender, etc.) that run with Protected
@@ -229,7 +250,11 @@ namespace NativeProcesses.Core.Providers
                         _session.Source.Kernel.PerfInfoSample += OnPerfInfoSample;
 
                         _session.Source.Kernel.VirtualMemAlloc += OnVirtualAlloc;
-                        _session.Source.Kernel.VirtualMemFree += OnVirtualFree; 
+                        _session.Source.Kernel.VirtualMemFree += OnVirtualFree;
+                        _session.Source.Kernel.VirtualMemAlloc += OnVirtualAllocBehavior;
+
+                        _session.Source.Kernel.ImageLoad += OnImageLoad;
+
                         _flushTimer = new Timer(AggregateAndFlush, null, _intervalMs, _intervalMs);
 
                         _session.Source.Process();
@@ -246,6 +271,63 @@ namespace NativeProcesses.Core.Providers
                 }
             });
         }
+        private void OnJitStarted(MethodJittingStartedTraceData data)
+        {
+            if (!_monitoredHandles.ContainsKey(data.ProcessID)) return;
+
+            History.AddEvent(data.ProcessID, new BehaviorEvent
+            {
+                Time = data.TimeStamp,
+                Type = BehaviorEventType.JitCompile,
+                Details = $"Token: {data.MethodToken}",
+                MethodName = $"{data.MethodNamespace}::{data.MethodName}"
+            });
+        }
+
+        private void OnVirtualAllocBehavior(VirtualAllocTraceData data)
+        {
+            if (!_monitoredHandles.ContainsKey(data.ProcessID)) return;
+
+            History.AddEvent(data.ProcessID, new BehaviorEvent
+            {
+                Time = data.TimeStamp,
+                Type = BehaviorEventType.VirtualAlloc,
+                Address = (long)data.BaseAddr,
+                Size = data.Length,
+                Details = data.Flags.ToString()
+            });
+        }
+
+        private void OnImageLoad(ImageLoadTraceData data)
+        {
+            if (!_monitoredHandles.ContainsKey(data.ProcessID)) return;
+
+            History.AddEvent(data.ProcessID, new BehaviorEvent
+            {
+                Time = data.TimeStamp,
+                Type = BehaviorEventType.ImageLoad,
+                Address = (long)data.ImageBase,
+                Size = data.ImageSize,
+                Details = data.FileName
+            });
+        }
+        
+        private void OnVirtualProtectBehavior(VirtualAllocTraceData data)
+        {
+            // VirtualMemProtect nutzt auch VirtualAllocTraceData Struktur
+            if (!_monitoredHandles.ContainsKey(data.ProcessID)) return;
+
+            History.AddEvent(data.ProcessID, new BehaviorEvent
+            {
+                Time = data.TimeStamp,
+                Type = BehaviorEventType.VirtualProtect,
+                Address = (long)data.BaseAddr,
+                Size = data.Length,
+                Details = data.Flags.ToString() // New Protection
+            });
+        }
+
+     
         private void OnProcessStart(ProcessTraceData data)
         {
             try

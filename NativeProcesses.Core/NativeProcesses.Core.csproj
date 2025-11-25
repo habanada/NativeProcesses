@@ -226,6 +226,8 @@
   <ItemGroup>
     <Compile Include="Demo\DebugPrivilege.cs" />
     <Compile Include="Demo\RunRemoteInjectionDemo.cs" />
+    <Compile Include="Engine\BehaviorEvent.cs" />
+    <Compile Include="Engine\ProcessHistory.cs" />
     <Compile Include="Engine\ProcessMetric.cs" />
     <Compile Include="Engine\ProcessMetricChangeEventArgs.cs" />
     <Compile Include="Engine\ProcessMonitorEngine.cs" />
@@ -237,7 +239,10 @@
     <Compile Include="Inspection\DotNetInspector.cs" />
     <Compile Include="Inspection\DotNetMalwareScanner.cs" />
     <Compile Include="Inspection\FoundPeHeaderInfo.cs" />
+    <Compile Include="Inspection\Heuristics\AdvancedIlScanner.cs" />
+    <Compile Include="Inspection\Heuristics\AssemblyMismatchScanner.cs" />
     <Compile Include="Inspection\Heuristics\AssemblyScanner.cs" />
+    <Compile Include="Inspection\Heuristics\BehavioralAnalyzer.cs" />
     <Compile Include="Inspection\Heuristics\ByteArrayScanner.cs" />
     <Compile Include="Inspection\Heuristics\CryptoScanner.cs" />
     <Compile Include="Inspection\Heuristics\DynamicMethodScanner.cs" />
@@ -245,9 +250,12 @@
     <Compile Include="Inspection\Heuristics\HeuristicEnums.cs" />
     <Compile Include="Inspection\Heuristics\HeuristicResult.cs" />
     <Compile Include="Inspection\Heuristics\HotSpotScanner.cs" />
+    <Compile Include="Inspection\Heuristics\JitHookScanner.cs" />
     <Compile Include="Inspection\Heuristics\MalwareClassifier.cs" />
+    <Compile Include="Inspection\Heuristics\ManagedInjectorScanner.cs" />
     <Compile Include="Inspection\Heuristics\MlFeatureExtractor.cs" />
     <Compile Include="Inspection\Heuristics\MlFeatureVector.cs" />
+    <Compile Include="Inspection\Heuristics\NetworkHeuristics.cs" />
     <Compile Include="Inspection\Heuristics\RatPatternScanner.cs" />
     <Compile Include="Inspection\Heuristics\RuntimeIlScanner.cs" />
     <Compile Include="Inspection\Heuristics\StringScanner.cs" />

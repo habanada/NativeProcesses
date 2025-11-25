@@ -10,10 +10,16 @@ namespace NativeProcesses.Core.Inspection.Heuristics
 {
     public class RuntimeIlScanner
     {
+        // OpCodes
         private const byte Op_Calli = 0x29;
-        private const byte Op_Localloc = 0xFE;
-        private const byte Op_Ldftn = 0xFE;
-        private const byte Op_Cpblk = 0xFE;
+        private const byte Op_Stsfld = 0x80;
+        private const byte Op_Prefix_FE = 0xFE;
+
+        // FE-Prefix Codes
+        private const byte Op_Localloc = 0x0F;
+        private const byte Op_Ldftn = 0x06;
+        private const byte Op_Cpblk = 0x17;
+        private const byte Op_Initblk = 0x18;
 
         public IEnumerable<HeuristicResult> Scan(ClrRuntime runtime)
         {
@@ -35,28 +41,39 @@ namespace NativeProcesses.Core.Inspection.Heuristics
                         var ilBytes = IlExtractor.GetMethodIL(method);
                         if (ilBytes.Length == 0) continue;
 
+                        // 1. Calli (Indirect Native Call)
                         if (ContainsOpCode(ilBytes, Op_Calli))
                         {
-                            results.Add(new HeuristicResult(
-                                "Unsafe IL: Indirect Call",
-                                ScanCategory.CodeInjection,
-                                ThreatScore.Critical,
-                                $"Method '{method.Name}' uses 'calli' instruction. This executes raw function pointers (Shellcode).",
-                                method.NativeCode.ToString("X"),
-                                "OpCode: calli"
-                            ));
+                            results.Add(CreateResult("Unsafe IL: Indirect Call (Calli)", ThreatScore.Critical, method, "OpCode: 0x29 (Calli)"));
                         }
 
-                        if (ContainsSequence(ilBytes, new byte[] { 0xFE, 0x0F }))
+                        // 2. Stsfld (Static Field Write - oft für Persistence/Global State in Loadern)
+                        // Alleine harmlos, aber in dynamischen Modulen verdächtig.
+                        if (module.IsDynamic && ContainsOpCode(ilBytes, Op_Stsfld))
                         {
-                            results.Add(new HeuristicResult(
-                                "Unsafe IL: Stack Allocation",
-                                ScanCategory.CodeInjection,
-                                ThreatScore.High,
-                                $"Method '{method.Name}' uses 'localloc'. Often used to allocate shellcode buffers on stack.",
-                                method.NativeCode.ToString("X"),
-                                "OpCode: localloc"
-                            ));
+                            results.Add(CreateResult("Unsafe IL: Static Field Write (Dynamic)", ThreatScore.Medium, method, "OpCode: 0x80 (Stsfld)"));
+                        }
+
+                        // 3. FE-Prefix Opcodes scannen
+                        for (int i = 0; i < ilBytes.Length - 1; i++)
+                        {
+                            if (ilBytes[i] == Op_Prefix_FE)
+                            {
+                                byte next = ilBytes[i + 1];
+
+                                if (next == Op_Localloc)
+                                {
+                                    results.Add(CreateResult("Unsafe IL: Stack Allocation", ThreatScore.High, method, "OpCode: 0xFE 0x0F (Localloc)"));
+                                }
+                                else if (next == Op_Ldftn)
+                                {
+                                    results.Add(CreateResult("Unsafe IL: Function Pointer Load", ThreatScore.High, method, "OpCode: 0xFE 0x06 (Ldftn)"));
+                                }
+                                else if (next == Op_Cpblk || next == Op_Initblk)
+                                {
+                                    results.Add(CreateResult("Unsafe IL: Memory Copy/Init", ThreatScore.High, method, "OpCode: 0xFE 0x17/18 (Cpblk/Initblk)"));
+                                }
+                            }
                         }
                     }
                 }
@@ -81,17 +98,16 @@ namespace NativeProcesses.Core.Inspection.Heuristics
             return false;
         }
 
-        private bool ContainsSequence(byte[] buffer, byte[] pattern)
+        private HeuristicResult CreateResult(string name, ThreatScore score, ClrMethod method, string artifact)
         {
-            int len = pattern.Length;
-            int limit = buffer.Length - len;
-            for (int i = 0; i <= limit; i++)
-            {
-                int k = 0;
-                for (; k < len; k++) if (pattern[k] != buffer[i + k]) break;
-                if (k == len) return true;
-            }
-            return false;
+            return new HeuristicResult(
+                name,
+                ScanCategory.CodeInjection,
+                score,
+                $"Suspicious IL instruction in '{method.Signature ?? method.Name}'",
+                method.NativeCode.ToString("X"),
+                artifact
+            );
         }
     }
 }
