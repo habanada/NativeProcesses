@@ -486,5 +486,17 @@ namespace NativeProcesses.Core.Native
                 Reserved = new ulong[3];
             }
         }
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetExitCodeThread(IntPtr hThread, out uint lpExitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+        [DllImport("ntdll.dll", SetLastError = true)]
+        public static extern int NtWaitForSingleObject(
+            IntPtr Handle,
+            bool Alertable,
+            IntPtr Timeout
+        );
     }
 }

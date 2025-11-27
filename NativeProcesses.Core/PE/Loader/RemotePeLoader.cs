@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Runtime.InteropServices;
 using NativeProcesses.Core.Native;
 using NativeProcesses.Core.PE;
 
@@ -11,77 +12,57 @@ namespace NativeProcesses.Core.PE.Loader
             if (targetProcess == null) throw new ArgumentNullException(nameof(targetProcess));
             if (rawPe == null || rawPe.Length == 0) throw new ArgumentNullException(nameof(rawPe));
 
-            // 1. Lokal Mappen (Raw -> Virtual Layout)
+            // 1. Lokal Mappen (Header Expansion)
             byte[] virtualPe = PeLoader.MapRawToVirtual(rawPe);
-            if (virtualPe == null) throw new Exception("Failed to map PE to virtual memory.");
 
-            // 2. Remote Speicher reservieren
-            // Wir fragen nicht nach einer Preferred Address, sondern lassen das OS entscheiden (ASLR).
+            // 2. Alloc Remote
             IntPtr remoteBase = targetProcess.AllocateMemory(virtualPe.Length);
 
             try
             {
-                // 3. Relocations anwenden
-                // WICHTIG: Wir patchen unser LOKALES byte[] Array, aber wir nutzen die REMOTE Adresse als Zielbasis!
-                if (!RelocationsFixer.ApplyRelocations(virtualPe, (ulong)remoteBase.ToInt64()))
-                {
-                    // Relocs failed. Wenn das Image nicht PIC (Position Independent) ist, wird es crashen.
-                }
+                // 3. Relocations (Lokal patchen für Remote Adresse)
+                RelocationsFixer.ApplyRelocations(virtualPe, (ulong)remoteBase.ToInt64());
 
-                // 4. Imports fixen
-                // Wir lösen die Imports lokal auf. Da System-DLLs (kernel32/ntdll) meist an derselben Adresse liegen,
-                // funktionieren diese Pointer auch im Zielprozess.
-                if (!ImportsFixer.FixImports(virtualPe))
-                {
-                    throw new Exception("Failed to resolve imports for remote injection.");
-                }
+                // 4. Imports Remotely Resolven (Der neue Fix!)
+                // Wir schreiben zuerst das halb-fertige Image, damit wir Offsets haben? 
+                // Nein, Resolve schreibt direkt in den Prozessspeicher, braucht aber das Mapping.
+                // Wir schreiben erst das Image rüber, damit RemoteImportResolver.EnsureRemoteModuleLoaded funktioniert?
+                // Nein, ImportResolver braucht nur Lesezugriff auf 'virtualPe' und Schreibzugriff auf 'targetProcess'.
 
-                // 5. Security Cookie fixen (Lokal patchen für Remote Adresse?)
-                // Schwierig, da wir den Remote-Cookie-Wert nicht kennen. 
-                // Wir lassen es vorerst, da moderne CRT den Cookie zur Laufzeit generiert wenn er 0 ist.
-
-                // 6. TLS Callbacks?
-                // Remote TLS Callbacks auszuführen ist extrem komplex (Shellcode nötig). 
-                // Wir überspringen das hier. Wenn die Payload TLS braucht, könnte sie instabil sein.
-
-                // 7. In den Zielprozess schreiben
+                // Wir müssen 'virtualPe' schreiben, DAMIT der IAT Platz da ist.
                 targetProcess.WriteMemory(remoteBase, virtualPe);
 
-                // 8. EntryPoint berechnen
-                if (!PeLoader.GetImageBase(virtualPe, out _, out bool is64Bit))
-                    throw new Exception("Failed to parse headers for EntryPoint.");
+                // Jetzt fixen wir die IAT im Remote Prozess
+                bool is64 = !targetProcess.GetIsWow64();
+                RemoteImportResolver.ResolveAndWrite(targetProcess, virtualPe, remoteBase, is64);
 
-                // Wir müssen den Offset des EntryPoints aus den Rohdaten lesen
-                // Da wir virtualPe haben, können wir direkt an den Offsets lesen
+                // 5. EntryPoint & TLS vorbereiten
                 int e_lfanew = BitConverter.ToInt32(virtualPe, 0x3C);
-                int optHeaderOffset = e_lfanew + 24;
+                uint epRva = BitConverter.ToUInt32(virtualPe, e_lfanew + 24 + 16); // AddressOfEntryPoint
+                IntPtr remoteEp = IntPtr.Add(remoteBase, (int)epRva);
 
-                // Offset AddressOfEntryPoint: 
-                // 32-bit: Offset 16 in OptionalHeader
-                // 64-bit: Offset 16 in OptionalHeader
-                int entryPointRvaOffset = optHeaderOffset + 16;
-                uint entryPointRva = BitConverter.ToUInt32(virtualPe, entryPointRvaOffset);
+                bool isDll = (BitConverter.ToUInt16(virtualPe, e_lfanew + 4 + 18) & 0x2000) != 0;
 
-                if (entryPointRva == 0) throw new Exception("No EntryPoint found.");
+                // 6. Shellcode generieren (TLS + DllMain)
+                byte[] shellcode = RemoteTlsShellcode.Generate(virtualPe, remoteBase, remoteEp, isDll);
 
-                IntPtr remoteEntryPoint = IntPtr.Add(remoteBase, (int)entryPointRva);
+                IntPtr executionPtr = remoteEp; // Fallback ohne TLS
 
-                // 9. Thread starten
-                // Hinweis: DllMain erwartet (hInst, Reason, Reserved). CreateRemoteThread übergibt nur (Param).
-                // Für EXEs ist das egal (Main hat keine Params oder ignoriert sie oft).
-                // Für DLLs wird der Parameter als hInst interpretiert, was korrekt ist (unsere remoteBase).
-                // Reason wird implizit DLL_PROCESS_ATTACH sein, da es ein neuer Thread ist? 
-                // Nein, CreateRemoteThread startet einfach bei der Adresse. 
-                // Bei DLLs ist das ein Hack. Sauber wäre ein Shellcode Stub.
-                // Aber für viele Payloads (z.B. Cobalt Strike Beacon) funktioniert der direkte Aufruf.
+                if (shellcode != null)
+                {
+                    IntPtr shellcodePtr = targetProcess.AllocateMemory(shellcode.Length);
+                    targetProcess.WriteMemory(shellcodePtr, shellcode);
+                    executionPtr = shellcodePtr;
+                }
 
-                targetProcess.StartRemoteThread(remoteEntryPoint, remoteBase);
+                // 7. Ausführen
+                targetProcess.StartRemoteThread(executionPtr, IntPtr.Zero);
 
                 return remoteBase;
             }
             catch
             {
-                // Cleanup nicht möglich ohne VirtualFreeEx (TODO: in ManagedProcessExtensions ergänzen)
+                // Cleanup TODO: VirtualFreeEx
                 throw;
             }
         }

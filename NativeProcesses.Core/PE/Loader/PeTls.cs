@@ -12,7 +12,8 @@ namespace NativeProcesses.Core.PE.Loader
 
         private const uint DLL_PROCESS_ATTACH = 1;
 
-        public static bool ExecuteTlsCallbacks(IntPtr moduleBase)
+        // 1 = DLL_PROCESS_ATTACH (Default)
+        public static bool ExecuteTlsCallbacks(IntPtr moduleBase, uint reason = 1)
         {
             if (moduleBase == IntPtr.Zero) return false;
 
@@ -25,7 +26,6 @@ namespace NativeProcesses.Core.PE.Loader
                 ushort magic = (ushort)Marshal.ReadInt16(optHeader);
 
                 uint tlsRva = 0;
-                // uint tlsSize = 0; 
 
                 if (magic == PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
                 {
@@ -56,15 +56,6 @@ namespace NativeProcesses.Core.PE.Loader
 
                 if (callBacksPtrAddr == IntPtr.Zero) return true;
 
-                // Achtung: AddressOfCallBacks ist eine VA (Virtual Address), keine RVA!
-                // Aber da wir manuell mappen, müssen wir prüfen, ob die Relocation schon angewandt wurde.
-                // PeExecutor ruft RelocationsFixer *vorher* auf, also zeigt die VA im Speicher bereits auf unseren Speicherbereich.
-
-                // Wir müssen lesen, ob die Adresse valide ist. 
-                // Wenn wir "Manually Mapped" sind, ist die VA im TLS-Header evtl. noch die "alte" (Preferred ImageBase), 
-                // FALLS RelocationsFixer das TLS-Directory nicht gepatcht hat. 
-                // Der Standard-Relocator patcht aber ALLES, auch das TLS Directory. 
-
                 // Wir iterieren durch das null-terminierte Array von Function Pointers
                 int ptrSize = (magic == PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC) ? 8 : 4;
                 int index = 0;
@@ -88,7 +79,9 @@ namespace NativeProcesses.Core.PE.Loader
 
                     // Callback ausführen
                     var callback = Marshal.GetDelegateForFunctionPointer<TlsCallbackDelegate>(callbackFuncPtr);
-                    callback(moduleBase, DLL_PROCESS_ATTACH, IntPtr.Zero);
+
+                    // Nutzung von 'reason' statt Hardcoded Constant
+                    callback(moduleBase, reason, IntPtr.Zero);
 
                     index++;
                 }

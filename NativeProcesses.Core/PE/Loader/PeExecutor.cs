@@ -4,9 +4,11 @@
 */
 using System;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using NativeProcesses.Core.PE;
 using NativeProcesses.Core.PE.Export;
+using NativeProcesses.Core.PE.Resources;
 
 namespace NativeProcesses.Core.PE.Loader
 {
@@ -25,6 +27,9 @@ namespace NativeProcesses.Core.PE.Loader
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool FlushInstructionCache(IntPtr hProcess, IntPtr lpBaseAddress, UIntPtr dwSize);
 
+        private IntPtr _hActCtx = IntPtr.Zero;
+        private string _tempManifestPath = null;
+
         // we could use RtlInsertInvertedFunctionTable from ntdll with struct Inverted Function Table for stealth but we use RtlAddFunctionTable  to make us Visible and to have more stability!
         //we need to make the ntdll.dll readwrite with PAGE_READWRITE this would be a massive RED FLAG and would trigger EDR, also it would mean we have to check were we run Win7, 8, 10, 11 this 
         //strucktures change a lot its easier and safer not to do it - we coudl but we let it go...
@@ -42,6 +47,12 @@ namespace NativeProcesses.Core.PE.Loader
         private const uint PAGE_EXECUTE_READWRITE = 0x40;
         private const uint PAGE_READWRITE = 0x04;
         private const uint PAGE_EXECUTE_READ = 0x20;
+
+        // DLL Main Reasons
+        private const uint DLL_PROCESS_ATTACH = 1;
+        private const uint DLL_THREAD_ATTACH = 2;
+        private const uint DLL_THREAD_DETACH = 3;
+        private const uint DLL_PROCESS_DETACH = 0;
         #endregion
 
         // Interne Status-Variablen
@@ -50,7 +61,7 @@ namespace NativeProcesses.Core.PE.Loader
         private bool _isDisposed = false;
         private IntPtr _pExceptionTable = IntPtr.Zero;
         private IntPtr _pebEntry = IntPtr.Zero;
-
+        private bool _tlsCallbacksExecuted = false; // Schutz vor doppelter Ausführung
         /// <summary>
         /// Gibt die Basisadresse des geladenen Moduls zurück (falls geladen).
         /// </summary>
@@ -59,7 +70,8 @@ namespace NativeProcesses.Core.PE.Loader
         /// <summary>
         /// Lädt eine PE-Datei (Raw Bytes) vollständig in den Speicher.
         /// Führt Mapping, Relocations, Import Resolution, Security Cookie Init und TLS Callbacks aus.
-        /// </summary>
+        /// Führt KEINEN Code aus (weder TLS noch DllMain). Das passiert erst in Run().
+        /// /// </summary>
         /// <param name="rawPe">Das Byte-Array der rohen PE-Datei (z.B. File.ReadAllBytes).</param>
         /// <returns>True bei Erfolg, sonst wird eine Exception geworfen.</returns>
         public bool Load(byte[] rawPe, string fakeDllName = "module.dll")
@@ -67,114 +79,79 @@ namespace NativeProcesses.Core.PE.Loader
             if (rawPe == null || rawPe.Length == 0)
                 throw new ArgumentNullException(nameof(rawPe), "PE buffer is empty.");
 
-            // Falls bereits was geladen war, freigeben
+            // Aufräumen, falls schon was geladen war
             if (_loadedImageBase != IntPtr.Zero) Free();
 
             try
             {
-                // ---------------------------------------------------------
-                // SCHRITT 1: Mapping (Raw -> Virtual)
-                // ---------------------------------------------------------
-                // libpeconv: pe_raw_to_virtual
-                // Wir expandieren die Sections entsprechend ihrem VirtualAlignment.
+                // 1. Mapping (Raw -> Virtual)
+                // Wir erstellen das Speicherlayout lokal im Byte-Array
                 byte[] virtualPe = PeLoader.MapRawToVirtual(rawPe);
                 _imageSize = (UIntPtr)virtualPe.Length;
 
-                // ---------------------------------------------------------
-                // SCHRITT 2: Allokation
-                // ---------------------------------------------------------
-                // Wir reservieren Speicher im aktuellen Prozess.
-                // Wir nutzen PAGE_EXECUTE_READWRITE, damit wir Patchen (Imports/Relocs) und Ausführen können.
-                // In einer strikteren Implementierung würde man erst RW, dann RX setzen.
+                // 2. Allokation
+                // Wir reservieren den echten Speicher im Prozess
                 _loadedImageBase = VirtualAlloc(IntPtr.Zero, _imageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                if (_loadedImageBase == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
 
-                if (_loadedImageBase == IntPtr.Zero)
-                {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "VirtualAlloc failed to allocate memory for PE image.");
-                }
-
-                // ---------------------------------------------------------
-                // SCHRITT 3: Relocations (Base Relocs)
-                // ---------------------------------------------------------
-                // libpeconv: relocate_module
-                // Wir berechnen das Delta zwischen der Preferred ImageBase (im Header) und unserer _loadedImageBase.
-                // RelocationsFixer wendet dies direkt auf unser `virtualPe` Byte-Array an.
-
+                // 3. Relocations
+                // Wir passen Adressen im 'virtualPe' Array an die neue '_loadedImageBase' an
                 if (!RelocationsFixer.ApplyRelocations(virtualPe, (ulong)_loadedImageBase.ToInt64()))
                 {
-                    // Warnung: Relocations fehlgeschlagen. Das passiert oft bei Stripped Binaries.
-                    // Wir brechen hier nicht hart ab, da Code evtl. Position Independent ist, 
-                    // aber es ist ein kritisches Risiko.
-                    // System.Diagnostics.Debug.WriteLine("[WARN] Applying relocations failed (or not needed).");
+                    // Log: Relocations failed or not needed (z.B. bei .NET oder Position Independent Code)
                 }
 
-                // ---------------------------------------------------------
-                // SCHRITT 4: Import Resolution (IAT Fixing)
-                // ---------------------------------------------------------
-                // libpeconv: load_imports
-                // Wir laden abhängige DLLs (LoadLibrary) und schreiben Funktionsadressen (GetProcAddress) in die IAT.
-
-                if (!ImportsFixer.FixImports(virtualPe))
-                {
-                    throw new Exception("Failed to resolve imports. Dependent DLLs might be missing or incompatible.");
-                }
-
-                // ---------------------------------------------------------
-                // SCHRITT 5: Kopieren in den nativen Speicher
-                // ---------------------------------------------------------
-                // Jetzt, wo das Byte-Array gepatcht ist, schieben wir es in den ausführbaren Speicher.
+                // 4. Initialer Copy in den Speicher (WICHTIG für Ressourcen-Zugriff)
+                // Wir kopieren das Image JETZT schon, damit wir Ressourcen (Manifest) lesen können.
                 Marshal.Copy(virtualPe, 0, _loadedImageBase, virtualPe.Length);
-                // NEU: SCHRITT 5b - Exceptions
-                if (!EnableExceptions(virtualPe))
-                {
-                    // Optional: Log warning. Ist nicht kritisch für Programmstart, aber für Stabilität.
-                    // System.Diagnostics.Debug.WriteLine("SEH Registration failed or not needed.");
-                }
-                // NEU: SCHRITT 5c - PEB Linking (Make Visible)
-                // ---------------------------------------------------------
-                // Wir gaukeln Windows vor, dass diese DLL wirklich geladen ist.
-                // Das erlaubt GetModuleHandle(fakeDllName) und API Calls, die das Modul suchen.
 
+                // 5. Activation Context vorbereiten
+                // Liest das Manifest aus _loadedImageBase und erstellt den Kontext
+                PrepareActivationContext(_loadedImageBase);
+
+                // 6. Import Resolution (Unter dem Schutz des ActCtx)
+                bool importsSuccess = false;
+
+                ExecuteWithActCtx(() =>
+                {
+                    // ImportsFixer lädt DLLs (LoadLibrary). Dank ActCtx werden die richtigen Versionen (SxS) geladen.
+                    // Er schreibt die Adressen in das 'virtualPe' Array (IAT).
+                    importsSuccess = ImportsFixer.FixImports(virtualPe);
+                });
+
+                if (!importsSuccess)
+                {
+                    throw new Exception("Failed to resolve imports. Dependencies missing or ActCtx failed.");
+                }
+
+                // 7. Finaler Copy (IAT Update)
+                // Da ImportsFixer in 'virtualPe' geschrieben hat, müssen wir das Image 
+                // erneut in den Speicher kopieren (oder zumindest die Header/IAT Region).
+                Marshal.Copy(virtualPe, 0, _loadedImageBase, virtualPe.Length);
+
+                // 8. Exceptions (SEH)
+                EnableExceptions(virtualPe);
+
+                // 9. PEB Linking
                 _pebEntry = PePebLinker.LinkModuleToPeb(_loadedImageBase, (uint)_imageSize, "C:\\Windows\\System32\\" + fakeDllName);
-                // ---------------------------------------------------------
-                // SCHRITT 6: Security Cookie (Load Config)
-                // ---------------------------------------------------------
-                // libpeconv: fix_security_cookie
-                // Wichtig für MSVC Binaries (Stack Canary /GS). Ohne das crasht es sofort bei __security_check_cookie.
-                // Dies muss im NATIVEN Speicher passieren, da wir Pointer schreiben.
 
-                if (!PeConfig.InitSecurityCookie(_loadedImageBase))
-                {
-                    // Warnung, aber kein Abbruch. Alte PEs haben keine LoadConfig.
-                }
+                // 10. Security Cookie
+                PeConfig.InitSecurityCookie(_loadedImageBase);
 
-                // ---------------------------------------------------------
-                // SCHRITT 7: TLS Callbacks
-                // ---------------------------------------------------------
-                // libpeconv: run_tls_callbacks
-                // Führt Initialisierungscode aus (oft Anti-Debug oder Setup), bevor der EntryPoint läuft.
+                // Hinweis: TLS Callbacks werden hier NICHT mehr ausgeführt. 
+                // Das passiert jetzt korrekt in Run(), wie im Windows Loader.
 
-                if (!PeTls.ExecuteTlsCallbacks(_loadedImageBase))
-                {
-                    throw new Exception("Failed to execute TLS callbacks. The payload might have crashed during initialization.");
-                }
-            
-                // ---------------------------------------------------------
-                // SCHRITT 8: Finalisierung
-                // ---------------------------------------------------------
-                // Instruction Cache leeren, damit die CPU die neuen Opcodes auch wirklich sieht.
+                // 11. Flush Cache
                 FlushInstructionCache(IntPtr.Zero, _loadedImageBase, _imageSize);
 
                 return true;
             }
             catch (Exception)
             {
-                // Bei jedem Fehler aufräumen, um Memory Leaks zu vermeiden
                 Free();
                 throw;
             }
-        }
-        // ---------------------------------------------------------
+        }       // ---------------------------------------------------------
         // Hilfsmethode für Exception Support
         // ---------------------------------------------------------
         private bool EnableExceptions(byte[] virtualPe)
@@ -216,51 +193,113 @@ namespace NativeProcesses.Core.PE.Loader
                 return false;
             }
         }
+        private bool PrepareActivationContext(IntPtr moduleBase)
+        {
+            try
+            {
+                byte[] manifestData = PeResourceReader.GetManifest(moduleBase);
+
+                if (manifestData == null || manifestData.Length == 0)
+                    return false;
+
+                _tempManifestPath = Path.GetTempFileName();
+                File.WriteAllBytes(_tempManifestPath, manifestData);
+
+                var actCtx = new NativeProcesses.Core.Native.ActivationContext.ACTCTX();
+                actCtx.cbSize = Marshal.SizeOf(typeof(NativeProcesses.Core.Native.ActivationContext.ACTCTX));
+                actCtx.dwFlags = 0;
+                actCtx.lpSource = _tempManifestPath;
+
+                _hActCtx = NativeProcesses.Core.Native.ActivationContext.CreateActCtx(ref actCtx);
+
+                return (_hActCtx != NativeProcesses.Core.Native.ActivationContext.INVALID_HANDLE_VALUE);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void ExecuteWithActCtx(Action action)
+        {
+            IntPtr cookie = IntPtr.Zero;
+            bool active = false;
+
+            if (_hActCtx != IntPtr.Zero && _hActCtx != NativeProcesses.Core.Native.ActivationContext.INVALID_HANDLE_VALUE)
+            {
+                active = NativeProcesses.Core.Native.ActivationContext.ActivateActCtx(_hActCtx, out cookie);
+            }
+
+            try
+            {
+                action();
+            }
+            finally
+            {
+                if (active)
+                {
+                    NativeProcesses.Core.Native.ActivationContext.DeactivateActCtx(0, cookie);
+                }
+            }
+        }
         /// <summary>
-        /// Führt den EntryPoint der geladenen PE aus.
+        /// Führt TLS-Callbacks und den EntryPoint aus.
+        /// Entspricht LdrpRunInitializeRoutines in ReactOS.
         /// </summary>
         public void Run()
         {
             if (_loadedImageBase == IntPtr.Zero) throw new InvalidOperationException("PE not loaded. Call Load() first.");
 
-            // EntryPoint RVA aus Header lesen (direkt aus Memory)
+            // Header parsen um EntryPoint zu finden
             int e_lfanew = Marshal.ReadInt32(_loadedImageBase, 0x3C);
             IntPtr ntHeader = IntPtr.Add(_loadedImageBase, e_lfanew);
-            IntPtr optHeader = IntPtr.Add(ntHeader, 24); // Optional Header Start
-
+            IntPtr optHeader = IntPtr.Add(ntHeader, 24);
             ushort magic = (ushort)Marshal.ReadInt16(optHeader);
-            uint entryPointRva;
 
-            // Offset für AddressOfEntryPoint
-            if (magic == PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
-                entryPointRva = (uint)Marshal.ReadInt32(optHeader, 16);
-            else
-                entryPointRva = (uint)Marshal.ReadInt32(optHeader, 16);
+            uint entryPointRva = (magic == PeHeaders.IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+                ? (uint)Marshal.ReadInt32(optHeader, 16)
+                : (uint)Marshal.ReadInt32(optHeader, 16);
 
-            if (entryPointRva == 0) return; // Kein EntryPoint (z.B. Resource DLL)
-
-            IntPtr entryPointAddress = IntPtr.Add(_loadedImageBase, (int)entryPointRva);
-
-            // DLL vs EXE Unterscheidung
-            // Characteristics ist bei FileHeader (NT + 4) + Offset 18
+            // Prüfen ob es eine DLL ist (Flag 0x2000 in FileHeader Characteristics)
             ushort characteristics = (ushort)Marshal.ReadInt16(ntHeader, 4 + 18);
             bool isDll = (characteristics & 0x2000) != 0;
 
-            if (isDll)
+            // ReactOS: LdrpRunInitializeRoutines
+            // Reihenfolge:
+            // 1. Activate ActCtx
+            // 2. LdrpCallTlsInitializers (DLL_PROCESS_ATTACH)
+            // 3. LdrpCallInitRoutine (EntryPoint)
+            // 4. Deactivate ActCtx
+
+            ExecuteWithActCtx(() =>
             {
-                var dllMain = Marshal.GetDelegateForFunctionPointer<DllMainDelegate>(entryPointAddress);
-                // 1 = DLL_PROCESS_ATTACH
-                bool result = dllMain(_loadedImageBase, 1, IntPtr.Zero);
-                if (!result)
+                // 1. TLS Callbacks ausführen (falls vorhanden)
+                // Wichtig: Diese laufen VOR dem EntryPoint!
+                if (!_tlsCallbacksExecuted)
                 {
-                    throw new Exception("DllMain(DLL_PROCESS_ATTACH) returned false.");
+                    PeTls.ExecuteTlsCallbacks(_loadedImageBase); // Führt aktuell fest DLL_PROCESS_ATTACH aus
+                    _tlsCallbacksExecuted = true;
                 }
-            }
-            else
-            {
-                var exeMain = Marshal.GetDelegateForFunctionPointer<Action>(entryPointAddress);
-                exeMain();
-            }
+
+                // 2. Entry Point ausführen
+                if (entryPointRva != 0)
+                {
+                    IntPtr entryPointAddress = IntPtr.Add(_loadedImageBase, (int)entryPointRva);
+
+                    if (isDll)
+                    {
+                        // DllMain(hInst, DLL_PROCESS_ATTACH, Reserved)
+                        var dllMain = Marshal.GetDelegateForFunctionPointer<DllMainDelegate>(entryPointAddress);
+                        dllMain(_loadedImageBase, DLL_PROCESS_ATTACH, IntPtr.Zero);
+                    }
+                    else
+                    {
+                        // ExeMain()
+                        var exeMain = Marshal.GetDelegateForFunctionPointer<Action>(entryPointAddress);
+                        exeMain();
+                    }
+                }
+            });
         }
 
         /// <summary>
@@ -300,16 +339,28 @@ namespace NativeProcesses.Core.PE.Loader
 
         private void Free()
         {
+            if (_hActCtx != IntPtr.Zero && _hActCtx != NativeProcesses.Core.Native.ActivationContext.INVALID_HANDLE_VALUE)
+            {
+                NativeProcesses.Core.Native.ActivationContext.ReleaseActCtx(_hActCtx);
+                _hActCtx = IntPtr.Zero;
+            }
+
+            if (!string.IsNullOrEmpty(_tempManifestPath) && File.Exists(_tempManifestPath))
+            {
+                try { File.Delete(_tempManifestPath); } catch { }
+                _tempManifestPath = null;
+            }
+
+            // ... (Rest deiner Free Methode: VirtualFree etc.) ...
             if (_loadedImageBase != IntPtr.Zero)
             {
-                // Erst aus dem PEB entfernen!
                 if (_pebEntry != IntPtr.Zero)
                 {
                     PePebLinker.UnlinkModuleFromPeb(_pebEntry);
                     _pebEntry = IntPtr.Zero;
                 }
-                // MEM_RELEASE (0x8000) gibt den Speicher komplett an das OS zurück.
-                // dwSize muss 0 sein bei MEM_RELEASE.
+                // Aufräumen Exception Table wenn nötig (RtlDeleteFunctionTable wäre hier gut)
+
                 VirtualFree(_loadedImageBase, UIntPtr.Zero, MEM_RELEASE);
                 _loadedImageBase = IntPtr.Zero;
             }
@@ -339,5 +390,84 @@ namespace NativeProcesses.Core.PE.Loader
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate bool DllMainDelegate(IntPtr hinstDLL, uint fdwReason, IntPtr lpvReserved);
+        // Helper für Exception Support (aus deinem vorherigen Code)
     }
 }
+
+
+/*
+ using System;
+using System.IO;
+using System.Windows.Forms; // Für MessageBox (Test-Output)
+using NativeProcesses.Core.PE.Loader; // Dein Namespace
+
+public static void TestManualMapping()
+{
+    // 1. Ziel-DLL auswählen
+    // Wir nehmen 'gdi32.dll' aus System32, da sie Manifest-Abhängigkeiten hat
+    // und sicher zu laden ist. Alternativ: Deine eigene Test-DLL.
+    string targetDll = Path.Combine(Environment.SystemDirectory, "gdi32.dll");
+
+    if (!File.Exists(targetDll))
+    {
+        MessageBox.Show("Test-DLL nicht gefunden!", "Fehler", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        return;
+    }
+
+    Console.WriteLine($"[Test] Lade {targetDll} manuell...");
+
+    try
+    {
+        // Bytes lesen
+        byte[] rawBytes = File.ReadAllBytes(targetDll);
+
+        // 2. PeExecutor Instanz erstellen
+        using (var executor = new PeExecutor())
+        {
+            // A. LOAD: Mappen, Relocations, Importe (unter ActCtx!), Security Cookie
+            // Wir geben ihr einen Fake-Namen, damit sie im PEB sichtbar ist (für GetModuleHandle)
+            bool success = executor.Load(rawBytes, "manual_gdi32.dll");
+
+            if (success)
+            {
+                Console.WriteLine($"[Test] Load erfolgreich! Basis: 0x{executor.LoadedImageBase.ToString("X")}");
+
+                // B. RUN: TLS Callbacks & DllMain (unter ActCtx!)
+                // Hier wird DllMain mit DLL_PROCESS_ATTACH aufgerufen
+                executor.Run();
+                Console.WriteLine("[Test] Run (DllMain Attach) erfolgreich ausgeführt.");
+
+                // C. OPTIONAL: Thread Attach testen (Das neue Feature!)
+                // Simuliert, dass ein neuer Thread erstellt wurde.
+                // Die DLL sollte (wenn sie TLS nutzt) darauf reagieren.
+                Console.WriteLine("[Test] Simuliere Thread Attach...");
+                executor.OnThreadAttach();
+                
+                // D. Export testen (Optional)
+                // Wir rufen eine harmlose Funktion auf, um zu sehen, ob der Code läuft.
+                // Hinweis: GDI32 exportiert kaum einfache Void-Funktionen ohne Params.
+                // Bei einer eigenen DLL könntest du hier executor.RunExport("MyExport") rufen.
+                
+                MessageBox.Show($"DLL manuell geladen an: 0x{executor.LoadedImageBase.ToString("X")}\n" +
+                                "Activation Context & Importe waren erfolgreich!\n" +
+                                "Schau in den Debug-Output.", 
+                                "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                // E. UNLOAD (Passiert automatisch beim Dispose)
+                // executor.Dispose() ruft Free(), was DllMain(DLL_PROCESS_DETACH) unter ActCtx ausführt.
+            }
+            else
+            {
+                Console.WriteLine("[Test] Load fehlgeschlagen (false zurückgegeben).");
+            }
+        } 
+        // Hier ist der Scope zu Ende -> Dispose -> Unload -> DllMain Detach
+        Console.WriteLine("[Test] DLL erfolgreich entladen.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Test] Kritischer Fehler: {ex.Message}");
+        MessageBox.Show($"Fehler beim Manual Mapping:\n{ex.Message}", "Fehler", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+}
+ */
