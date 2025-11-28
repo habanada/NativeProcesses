@@ -6,6 +6,7 @@ using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using NativeProcesses.Core.Native;
 using NativeProcesses.Core.PE;
 using NativeProcesses.Core.PE.Export;
 using NativeProcesses.Core.PE.Resources;
@@ -14,19 +15,7 @@ namespace NativeProcesses.Core.PE.Loader
 {
     public class PeExecutor : IDisposable
     {
-        #region P/Invoke Definitions
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr VirtualAlloc(IntPtr lpAddress, UIntPtr dwSize, uint flAllocationType, uint flProtect);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool VirtualFree(IntPtr lpAddress, UIntPtr dwSize, uint dwFreeType);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool FlushInstructionCache(IntPtr hProcess, IntPtr lpBaseAddress, UIntPtr dwSize);
-
+        
         private IntPtr _hActCtx = IntPtr.Zero;
         private string _tempManifestPath = null;
 
@@ -34,26 +23,7 @@ namespace NativeProcesses.Core.PE.Loader
         //we need to make the ntdll.dll readwrite with PAGE_READWRITE this would be a massive RED FLAG and would trigger EDR, also it would mean we have to check were we run Win7, 8, 10, 11 this 
         //strucktures change a lot its easier and safer not to do it - we coudl but we let it go...
         // we need RTL_INVERTED_FUNCTION_TABLE  we have LDR_DATA_TABLE_ENTRY 
-        [DllImport("kernel32.dll")]
-        static extern bool RtlAddFunctionTable(IntPtr FunctionTable, uint EntryCount, ulong BaseAddress);
 
-        [DllImport("kernel32.dll")]
-        private static extern bool RtlDeleteFunctionTable(IntPtr FunctionTable);
-
-        private const uint MEM_COMMIT = 0x1000;
-        private const uint MEM_RESERVE = 0x2000;
-        private const uint MEM_RELEASE = 0x8000;
-
-        private const uint PAGE_EXECUTE_READWRITE = 0x40;
-        private const uint PAGE_READWRITE = 0x04;
-        private const uint PAGE_EXECUTE_READ = 0x20;
-
-        // DLL Main Reasons
-        private const uint DLL_PROCESS_ATTACH = 1;
-        private const uint DLL_THREAD_ATTACH = 2;
-        private const uint DLL_THREAD_DETACH = 3;
-        private const uint DLL_PROCESS_DETACH = 0;
-        #endregion
 
         // Interne Status-Variablen
         private IntPtr _loadedImageBase = IntPtr.Zero;
@@ -91,7 +61,7 @@ namespace NativeProcesses.Core.PE.Loader
 
                 // 2. Allokation
                 // Wir reservieren den echten Speicher im Prozess
-                _loadedImageBase = VirtualAlloc(IntPtr.Zero, _imageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                _loadedImageBase = Kernel32.VirtualAlloc(IntPtr.Zero, _imageSize, Kernel32.MEM_COMMIT | Kernel32.MEM_RESERVE, Kernel32.PAGE_EXECUTE_READWRITE);
                 if (_loadedImageBase == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
 
                 // 3. Relocations
@@ -142,7 +112,7 @@ namespace NativeProcesses.Core.PE.Loader
                 // Das passiert jetzt korrekt in Run(), wie im Windows Loader.
 
                 // 11. Flush Cache
-                FlushInstructionCache(IntPtr.Zero, _loadedImageBase, _imageSize);
+                Kernel32.FlushInstructionCache(IntPtr.Zero, _loadedImageBase, _imageSize);
 
                 return true;
             }
@@ -186,7 +156,7 @@ namespace NativeProcesses.Core.PE.Loader
                 uint entryCount = exceptionSize / 12;
 
                 // Registrieren bei Windows
-                return RtlAddFunctionTable(_pExceptionTable, entryCount, (ulong)_loadedImageBase.ToInt64());
+                return Kernel32.RtlAddFunctionTable(_pExceptionTable, entryCount, (ulong)_loadedImageBase.ToInt64());
             }
             catch
             {
@@ -210,7 +180,7 @@ namespace NativeProcesses.Core.PE.Loader
                 actCtx.dwFlags = 0;
                 actCtx.lpSource = _tempManifestPath;
 
-                _hActCtx = NativeProcesses.Core.Native.ActivationContext.CreateActCtx(ref actCtx);
+                _hActCtx = NativeProcesses.Core.Native.Kernel32.CreateActCtx(ref actCtx);
 
                 return (_hActCtx != NativeProcesses.Core.Native.ActivationContext.INVALID_HANDLE_VALUE);
             }
@@ -227,7 +197,7 @@ namespace NativeProcesses.Core.PE.Loader
 
             if (_hActCtx != IntPtr.Zero && _hActCtx != NativeProcesses.Core.Native.ActivationContext.INVALID_HANDLE_VALUE)
             {
-                active = NativeProcesses.Core.Native.ActivationContext.ActivateActCtx(_hActCtx, out cookie);
+                active = NativeProcesses.Core.Native.Kernel32.ActivateActCtx(_hActCtx, out cookie);
             }
 
             try
@@ -238,7 +208,7 @@ namespace NativeProcesses.Core.PE.Loader
             {
                 if (active)
                 {
-                    NativeProcesses.Core.Native.ActivationContext.DeactivateActCtx(0, cookie);
+                    NativeProcesses.Core.Native.Kernel32.DeactivateActCtx(0, cookie);
                 }
             }
         }
@@ -290,7 +260,7 @@ namespace NativeProcesses.Core.PE.Loader
                     {
                         // DllMain(hInst, DLL_PROCESS_ATTACH, Reserved)
                         var dllMain = Marshal.GetDelegateForFunctionPointer<DllMainDelegate>(entryPointAddress);
-                        dllMain(_loadedImageBase, DLL_PROCESS_ATTACH, IntPtr.Zero);
+                        dllMain(_loadedImageBase, Kernel32.DLL_PROCESS_ATTACH, IntPtr.Zero);
                     }
                     else
                     {
@@ -341,7 +311,7 @@ namespace NativeProcesses.Core.PE.Loader
         {
             if (_hActCtx != IntPtr.Zero && _hActCtx != NativeProcesses.Core.Native.ActivationContext.INVALID_HANDLE_VALUE)
             {
-                NativeProcesses.Core.Native.ActivationContext.ReleaseActCtx(_hActCtx);
+                NativeProcesses.Core.Native.Kernel32.ReleaseActCtx(_hActCtx);
                 _hActCtx = IntPtr.Zero;
             }
 
@@ -361,7 +331,7 @@ namespace NativeProcesses.Core.PE.Loader
                 }
                 // Aufräumen Exception Table wenn nötig (RtlDeleteFunctionTable wäre hier gut)
 
-                VirtualFree(_loadedImageBase, UIntPtr.Zero, MEM_RELEASE);
+                Kernel32.VirtualFree(_loadedImageBase, UIntPtr.Zero, Kernel32.MEM_RELEASE);
                 _loadedImageBase = IntPtr.Zero;
             }
         }

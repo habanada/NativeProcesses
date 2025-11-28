@@ -56,7 +56,91 @@ namespace NativeProcesses.Core.Inspection
             }
             return results;
         }
+        /* Erweiterung für ThreadScanner.cs
+   Erkennt ROP-Chains und Stack Pivoting
+*/
 
+        private void ScanForRop(ManagedProcess process, int tid, IntPtr threadHandle, List<VirtualMemoryRegion> stacks, List<ThreadScanReport> results)
+        {
+            CONTEXT ctx = new CONTEXT();
+            ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; // Wir brauchen RSP/RIP
+
+            if (GetThreadContext(threadHandle, ref ctx))
+            {
+                ulong rsp = ctx.Rsp;
+                ulong rip = ctx.Rip;
+
+                // 1. Check: Stack Pivoting
+                // Prüfen, ob RSP in einem bekannten Stack-Bereich liegt
+                bool validStack = false;
+                foreach (var stack in stacks) // Du musst die Stacks vorher via VAD identifizieren (Type=Private, Protection=RW, Größe typisch 1MB)
+                {
+                    ulong start = (ulong)stack.BaseAddress.ToInt64();
+                    ulong end = start + (ulong)stack.RegionSize;
+                    if (rsp >= start && rsp < end)
+                    {
+                        validStack = true;
+                        break;
+                    }
+                }
+
+                if (!validStack)
+                {
+                    results.Add(new ThreadScanReport
+                    {
+                        ThreadId = tid,
+                        Status = ThreadScanStatus.SuspiciousStack,
+                        Details = $"STACK PIVOT DETECTED! RSP (0x{rsp:X}) points outside known thread stacks. Typical for ROP payloads."
+                    });
+                    return;
+                }
+
+                // 2. Check: ROP Gadget Chain (Heuristik)
+                // Wir lesen die ersten paar Adressen vom Stack (die ROP Chain)
+                byte[] stackContent = process.ReadMemory((IntPtr)rsp, 64); // Lese 8 Adressen (x64)
+                if (stackContent == null) return;
+
+                int ropScore = 0;
+
+                for (int i = 0; i < stackContent.Length; i += 8)
+                {
+                    ulong returnAddr = BitConverter.ToUInt64(stackContent, i);
+
+                    // Ist die Adresse ausführbar? (Muss sie sein für ROP)
+                    // (Hier könntest du prüfen, ob returnAddr in einem MEM_IMAGE liegt)
+
+                    // VALIDIERUNG: Gab es einen CALL davor?
+                    // Wir lesen 6 Bytes VOR der Return-Adresse
+                    if (returnAddr > 6)
+                    {
+                        byte[] codeBefore = process.ReadMemory((IntPtr)(returnAddr - 6), 6);
+                        if (codeBefore != null)
+                        {
+                            // Prüfe auf typische CALL Opcodes: E8 (Call rel), FF 15 (Call indirect)
+                            bool hasCall = false;
+                            if (codeBefore[5] == 0xE8) hasCall = true; // CALL rel32 (5 bytes)
+                            if (codeBefore[4] == 0xFF && (codeBefore[5] & 0x10) == 0x10) hasCall = true; // CALL r/m (2-6 bytes)
+
+                            if (!hasCall)
+                            {
+                                ropScore++;
+                            }
+                        }
+                    }
+                }
+
+                // Wenn wir mehrere Adressen auf dem Stack haben, die NICHT von einem CALL stammen, ist es eine ROP Chain.
+                if (ropScore >= 3)
+                {
+                    results.Add(new ThreadScanReport
+                    {
+                        ThreadId = tid,
+                        Status = ThreadScanStatus.SuspiciousStack,
+                        Details = $"ROP CHAIN DETECTED! Found {ropScore} return addresses on stack without preceding CALL instructions."
+                    });
+                }
+            }
+        }
         private ThreadScanReport ScanSingleThread(ManagedProcess process, int tid, List<ProcessModuleInfo> modules, List<VirtualMemoryRegion> regions, SymbolResolver resolver)
         {
             var report = new ThreadScanReport { ThreadId = tid };
@@ -193,6 +277,20 @@ namespace NativeProcesses.Core.Inspection
                         }
                     }
 
+
+                    // Check: StartAddress liegt in Private Memory (Unbacked)  Halosgate 
+                    if (region != null && region.Type == "Private")
+                    {
+                        // Das ist der "Smoking Gun" für Manual Mapping & Shellcode Injection
+                        report.Status = ThreadScanStatus.SuspiciousStart;
+                        report.Details = $"Thread starts in PRIVATE memory at 0x{startAddress:X}. Legitimate threads usually start in MEM_IMAGE (DLLs).";
+
+                        // Zusatz-Check: Ist der Bereich executable?
+                        if (region.Protection.Contains("EXECUTE"))
+                        {
+                            report.Details += " Region is EXECUTABLE -> Confirmed Code Injection.";
+                        }
+                    }
                     // thread.Resume();
                 }
             }

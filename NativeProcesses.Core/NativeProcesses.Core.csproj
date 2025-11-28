@@ -226,6 +226,7 @@
   <ItemGroup>
     <Compile Include="Demo\DebugPrivilege.cs" />
     <Compile Include="Demo\RunRemoteInjectionDemo.cs" />
+    <Compile Include="Demo\TestDirectSyscall.cs" />
     <Compile Include="Engine\BehaviorEvent.cs" />
     <Compile Include="Engine\ProcessHistory.cs" />
     <Compile Include="Engine\ProcessMetric.cs" />
@@ -307,8 +308,10 @@
     <Compile Include="Models\VirtualMemoryRegion.cs" />
     <Compile Include="Models\WindowInfo.cs" />
     <Compile Include="Native\ActivationContext.cs" />
+    <Compile Include="Native\DirectSyscall.cs" />
     <Compile Include="Native\HandleTypeFilter.cs" />
     <Compile Include="Native\IpHelper.cs" />
+    <Compile Include="Native\Kernel32.cs" />
     <Compile Include="Native\ManagedProcess.cs" />
     <Compile Include="Native\ManagedProcessExtensions.cs" />
     <Compile Include="Native\NativeDefinitions.cs" />
@@ -323,6 +326,7 @@
     <Compile Include="Native\SnapshotDumper.cs" />
     <Compile Include="Native\StackWalker.cs" />
     <Compile Include="Native\SymbolResolver.cs" />
+    <Compile Include="Native\SyscallResolver.cs" />
     <Compile Include="Native\User32.cs" />
     <Compile Include="Native\WindowManager.cs" />
     <Compile Include="Inspection\PeStructs_deleted.cs" />

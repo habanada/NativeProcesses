@@ -32,18 +32,7 @@ namespace NativeProcesses.Core.Native
             public IntPtr hModule;
         }
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern IntPtr CreateActCtx(ref ACTCTX pActCtx);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool ActivateActCtx(IntPtr hActCtx, out IntPtr lpCookie);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool DeactivateActCtx(uint dwFlags, IntPtr ulCookie);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern void ReleaseActCtx(IntPtr hActCtx);
-
+      
         // FIX für CS0283: static readonly statt const für IntPtr
         public static readonly IntPtr INVALID_HANDLE_VALUE = (IntPtr)(-1);
     }

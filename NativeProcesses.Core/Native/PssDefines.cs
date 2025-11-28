@@ -5,10 +5,11 @@
 */
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace NativeProcesses.Core.Native
 {
-    internal static class PssDefines
+    public static class PssDefines
     {
         [Flags]
         public enum PSS_CAPTURE_FLAGS : uint
@@ -74,5 +75,19 @@ namespace NativeProcesses.Core.Native
             PSS_QUERY_INFORMATION_CLASS InformationClass,
             IntPtr Buffer,
             int BufferLength);
+        
+        [DllImport("psapi.dll", SetLastError = true)]
+        public static extern bool EnumProcessModules(
+            IntPtr hProcess,
+            [Out] IntPtr[] lphModule,
+            int cb,
+            [MarshalAs(UnmanagedType.I4)] out int lpcbNeeded);
+
+        [DllImport("psapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern uint GetModuleFileNameEx(
+            IntPtr hProcess,
+            IntPtr hModule,
+            [Out] StringBuilder lpBaseName,
+            [MarshalAs(UnmanagedType.I4)] int nSize);
     }
 }

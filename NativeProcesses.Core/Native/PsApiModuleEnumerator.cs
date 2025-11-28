@@ -11,19 +11,6 @@ namespace NativeProcesses.Core.Native
 {
     public static class PsApiModuleEnumerator
     {
-        [DllImport("psapi.dll", SetLastError = true)]
-        private static extern bool EnumProcessModules(
-            IntPtr hProcess,
-            [Out] IntPtr[] lphModule,
-            int cb,
-            [MarshalAs(UnmanagedType.I4)] out int lpcbNeeded);
-
-        [DllImport("psapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern uint GetModuleFileNameEx(
-            IntPtr hProcess,
-            IntPtr hModule,
-            [Out] StringBuilder lpBaseName,
-            [MarshalAs(UnmanagedType.I4)] int nSize);
 
         public static List<ProcessModuleInfo> GetModules(ManagedProcess process)
         {
@@ -36,7 +23,7 @@ namespace NativeProcesses.Core.Native
             IntPtr[] moduleHandles = new IntPtr[1024];
             int sizeNeeded;
 
-            if (!EnumProcessModules(process.Handle, moduleHandles, moduleHandles.Length * IntPtr.Size, out sizeNeeded))
+            if (!PssDefines.EnumProcessModules(process.Handle, moduleHandles, moduleHandles.Length * IntPtr.Size, out sizeNeeded))
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "EnumProcessModules failed.");
             }
@@ -51,7 +38,7 @@ namespace NativeProcesses.Core.Native
                     continue;
                 }
 
-                if (GetModuleFileNameEx(process.Handle, moduleHandles[i], sb, sb.Capacity) > 0)
+                if (PssDefines.GetModuleFileNameEx(process.Handle, moduleHandles[i], sb, sb.Capacity) > 0)
                 {
                     string path = sb.ToString();
                     modules.Add(new ProcessModuleInfo

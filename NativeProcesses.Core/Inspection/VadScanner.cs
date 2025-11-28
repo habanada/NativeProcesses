@@ -105,7 +105,78 @@ namespace NativeProcesses.Core.Inspection
 
             return regions;
         }
+        /// <summary>
+        /// Scannt nach manuellen Syscall-Stubs (Hell's Gate / JIT Trampolines).
+        /// Sucht nach dem Muster: MOV R10, RCX; MOV EAX, <SSN>; SYSCALL
+        /// </summary>
+        public List<PeAnomalyInfo> ScanForSyscallStubs(ManagedProcess process)
+        {
+            var anomalies = new List<PeAnomalyInfo>();
+            // Syscall Signature: 
+            // 4C 8B D1         (mov r10, rcx)
+            // B8 ?? ?? ?? ??   (mov eax, SSN)
+            // 0F 05            (syscall) - ODER - CD 2E (int 2e, alt)
 
+            // Wir suchen nach "4C 8B D1 B8" gefolgt von "0F 05" in kurzem Abstand.
+
+            try
+            {
+                // Nur Private/Commit und Executable (JIT Memory)
+                var regions = process.GetVirtualMemoryRegions()
+                    .Where(r => r.State == "Commit" &&
+                                r.Type == "Private" &&
+                                r.Protection.Contains("EXECUTE"))
+                    .ToList();
+
+                foreach (var region in regions)
+                {
+                    // Optimierung: JIT Methoden sind oft klein, aber der Heap ist groß.
+                    // Wir lesen in Chunks oder scannen nur, wenn die Region "verdächtig" klein ist?
+                    // Nein, JIT Heap ist riesig. Wir lesen Samples oder suchen gezielt.
+                    // Für diesen Proof-of-Concept lesen wir die ganze Region (Vorsicht bei Performance!).
+
+                    // Limit: Max 1MB pro Region scannen, um Performance zu schonen
+                    int bytesToRead = (int)Math.Min(region.RegionSize, 1024 * 1024);
+                    byte[] buffer = process.ReadMemory(region.BaseAddress, bytesToRead);
+                    if (buffer == null) continue;
+
+                    for (int i = 0; i < buffer.Length - 10; i++)
+                    {
+                        // Check 1: MOV R10, RCX; MOV EAX...
+                        if (buffer[i] == 0x4C && buffer[i + 1] == 0x8B && buffer[i + 2] == 0xD1 && buffer[i + 3] == 0xB8)
+                        {
+                            // Check 2: SYSCALL (0F 05) an Offset +8 (4C 8B D1 + B8 SSN_4byte)
+                            // Stub: [4C 8B D1] [B8 xx xx xx xx] [0F 05]
+                            // Index: 0..2       3..7             8..9
+
+                            if (i + 9 < buffer.Length)
+                            {
+                                if (buffer[i + 8] == 0x0F && buffer[i + 9] == 0x05)
+                                {
+                                    anomalies.Add(new PeAnomalyInfo
+                                    {
+                                        ModuleName = "JIT Heap / Private Memory",
+                                        AnomalyType = "Direct Syscall Stub Detected",
+                                        Details = $"Found 'Hell's Gate' pattern at +0x{i:X} in region 0x{region.BaseAddress.ToString("X")}. This is a manually crafted syscall wrapper.",
+                                        Severity = "Critical",
+                                        Address = (long)region.BaseAddress + i,
+                                        Size = 10
+                                    });
+                                    // Ein Treffer pro Region reicht
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(LogLevel.Error, "Syscall scan failed.", ex);
+            }
+
+            return anomalies;
+        }
 
 
         /// <summary>
