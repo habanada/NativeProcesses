@@ -8,9 +8,9 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("FilelessSimulator")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("BLOCK Verden")]
+[assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("FilelessSimulator")]
-[assembly: AssemblyCopyright("Copyright © BLOCK Verden 2025")]
+[assembly: AssemblyCopyright("Copyright © Selahattin Erkoc 2025")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
